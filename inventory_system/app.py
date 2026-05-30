@@ -1,6 +1,8 @@
 import streamlit as st
 from database import get_connection
 import os
+import shutil
+from datetime import datetime
 
 BASE_DIR = os.path.dirname(__file__)
 
@@ -10,6 +12,40 @@ logo_path = os.path.join(
 )
 
 conn = get_connection()
+
+# -------------------
+# ログイン
+# -------------------
+
+PASSWORD = "1234"
+
+if "login" not in st.session_state:
+    st.session_state.login = False
+
+if not st.session_state.login:
+
+    st.title("🔐 ログイン")
+
+    password = st.text_input(
+        "パスワード",
+        type="password"
+    )
+
+    if st.button("ログイン"):
+
+        if password == PASSWORD:
+
+            st.session_state.login = True
+
+            st.rerun()
+
+        else:
+
+            st.error(
+                "パスワードが違います"
+            )
+
+    st.stop()
 
 st.set_page_config(
     page_title="大阪陸運 八尾倉庫 在庫管理システム",
@@ -30,6 +66,31 @@ st.markdown(
 )
 
 st.write("---")
+
+if st.button("💾 DBバックアップ"):
+
+    db_path = os.path.join(
+        BASE_DIR,
+        "data",
+        "inventory.db"
+    )
+
+    backup_name = (
+        f"backup_"
+        f"{datetime.now().strftime('%Y%m%d_%H%M%S')}.db"
+    )
+
+    shutil.copy(
+        db_path,
+        backup_name
+    )
+
+    st.success(
+        f"バックアップ作成完了: {backup_name}"
+    )
+
+st.write("---")
+
 
 # 件数取得
 project_count = conn.execute(
