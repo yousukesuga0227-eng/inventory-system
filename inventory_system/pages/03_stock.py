@@ -1,6 +1,8 @@
 import streamlit as st
 from database import get_connection
+from auth import check_login
 
+check_login()
 conn = get_connection()
 
 st.title("入出庫登録")

@@ -1,6 +1,9 @@
 import streamlit as st
 import pandas as pd
 from database import get_connection
+from auth import check_login
+
+check_login()
 st.set_page_config(
     layout="wide"
 )

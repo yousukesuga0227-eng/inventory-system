@@ -3,7 +3,6 @@ import os
 import barcode
 from barcode.writer import ImageWriter
 from database import get_connection
-
 conn = get_connection()
 
 st.title("案件管理")
