@@ -79,18 +79,43 @@ with col3:
 
 st.write("---")
 
-st.subheader("システムメニュー")
+st.markdown("## 📋 システムメニュー")
 
-st.write("""
-・案件管理  
-・商品管理  
-・入出庫登録  
-・在庫一覧  
-・履歴確認  
-・商品検索  
-""")
+col1, col2 = st.columns(2)
 
-st.write("---")
+with col1:
+
+    st.page_link(
+        "pages/01_projects.py",
+        label="📁 案件管理"
+    )
+
+    st.page_link(
+        "pages/02_items.py",
+        label="📦 商品管理"
+    )
+
+    st.page_link(
+        "pages/03_stock.py",
+        label="📥📤 入出庫登録"
+    )
+
+with col2:
+
+    st.page_link(
+        "pages/04_stock_list.py",
+        label="📊 在庫一覧"
+    )
+
+    st.page_link(
+        "pages/05_history.py",
+        label="📝 入出庫履歴"
+    )
+
+    st.page_link(
+        "pages/07_item_search.py",
+        label="🔍 商品検索"
+    )
 
 st.caption(
     "大阪陸運 八尾倉庫 在庫管理システム Ver 1.0"
