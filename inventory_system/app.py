@@ -36,6 +36,11 @@ USERS = {
 "若杉": {
     "password": "0000",
     "role": "admin"
+},
+
+"鮫島": {
+    "password": "0904",
+    "role": "admin"
 }
 }
 
