@@ -54,10 +54,8 @@ if not st.session_state.login:
             if password == USERS[username]["password"]:
 
                 st.session_state.login = True
-
-                st.session_state.role = (
-                    USERS[username]["role"]
-                )
+                st.session_state.role = USERS[username]["role"]
+                st.session_state.username = username
 
                 st.rerun()
 

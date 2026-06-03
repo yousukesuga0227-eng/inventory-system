@@ -23,6 +23,9 @@ check_login()
 conn = get_connection()
 
 st.title("📄 出荷指示書")
+st.success(
+    f"ログイン中：{st.session_state.username}"
+)
 
 # =====================
 

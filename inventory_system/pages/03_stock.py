@@ -6,6 +6,9 @@ check_login()
 conn = get_connection()
 
 st.title("入出庫登録")
+st.success(
+    f"ログイン中：{st.session_state.username}"
+)
 
 # 案件取得
 projects = conn.execute(

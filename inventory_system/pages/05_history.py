@@ -10,6 +10,9 @@ st.set_page_config(
 conn = get_connection()
 
 st.title("入出庫履歴")
+st.success(
+    f"ログイン中：{st.session_state.username}"
+)
 
 query = """
 SELECT

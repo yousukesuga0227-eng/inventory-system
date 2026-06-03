@@ -10,6 +10,9 @@ from auth import check_admin
 check_admin()
 
 st.title("案件管理")
+st.success(
+    f"ログイン中：{st.session_state.username}"
+)
 
 code = st.text_input("案件コード")
 name = st.text_input("案件名")

@@ -11,6 +11,9 @@ check_admin()
 conn = get_connection()
 
 st.title("商品管理")
+st.success(
+    f"ログイン中：{st.session_state.username}"
+)
 
 # 案件一覧取得
 projects = conn.execute(

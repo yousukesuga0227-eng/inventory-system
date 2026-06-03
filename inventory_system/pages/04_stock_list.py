@@ -7,6 +7,9 @@ check_login()
 conn = get_connection()
 
 st.title("在庫一覧")
+st.success(
+    f"ログイン中：{st.session_state.username}"
+)
 
 # 案件一覧取得
 projects = conn.execute(
