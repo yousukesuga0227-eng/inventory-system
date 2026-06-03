@@ -135,19 +135,19 @@ st.write(
 
 if st.button("📄 出荷指示書作成"):
 
-    project = conn.execute(
+        project = conn.execute(
         """
         SELECT *
         FROM projects
         WHERE id = ?
         """,
-        (project_id,)   
+        (project_id,)
     ).fetchone()
 
-    project_code = project["code"]
-    project_name = project["name"]
+        project_code = project["code"]
+        project_name = project["name"]
 
-    items = conn.execute(
+        items = conn.execute(
         """
         SELECT
             code,
@@ -159,139 +159,152 @@ if st.button("📄 出荷指示書作成"):
         (project_id,)
     ).fetchall()
 
-    buffer = BytesIO()
+if not items:
 
-    doc = SimpleDocTemplate(buffer)
+        st.warning(
+            "この案件には商品が登録されていません"
+        )
 
-    styles = getSampleStyleSheet()
+        st.stop()
 
-    title_style = styles["Title"]
-    title_style.fontName = "NotoSansJP"
+        buffer = BytesIO()
 
-    normal_style = styles["BodyText"]
-    normal_style.fontName = "NotoSansJP"
+        doc = SimpleDocTemplate(buffer)
 
-    elements = []
+        styles = getSampleStyleSheet()
 
-    elements.append(
+        title_style = styles["Title"]
+        title_style.fontName = "NotoSansJP"
+
+        normal_style = styles["BodyText"]
+        normal_style.fontName = "NotoSansJP"
+
+        elements = []
+
+    # =====================
+    # タイトル
+    # =====================
+
+        elements.append(
         Paragraph(
             "出荷指示書",
             title_style
         )
     )
 
-    elements.append(
+        elements.append(
         Spacer(1, 20)
     )
 
-    elements.append(
+        elements.append(
         Paragraph(
             f"案件名：{project_name}",
             normal_style
         )
     )
 
-    # ↓↓↓ここから最後まで全部インデント↓↓↓
-
-elements.append(
-    Paragraph(
-        f"案件コード：{project_code}",
-        normal_style
+        elements.append(
+        Paragraph(
+            f"案件コード：{project_code}",
+            normal_style
+        )
     )
-)
 
-elements.append(
-    Paragraph(
-        f"発行日：{datetime.now().strftime('%Y/%m/%d')}",
-        normal_style
+        elements.append(
+        Paragraph(
+            f"発行日：{datetime.now().strftime('%Y/%m/%d')}",
+            normal_style
+        )
     )
-)
 
-elements.append(
-    Spacer(1, 20)
-)
+        elements.append(
+        Spacer(1, 20)
+    )
 
-# =====================
-# 商品一覧
-# =====================
+    # =====================
+    # 商品一覧
+    # =====================
 
 for item in items:
 
-    item_code = item["code"]
-    item_name = item["name"]
+        item_code = item["code"]
+        item_name = item["name"]
 
-    barcode_file = os.path.join(
-        BASE_DIR,
-        "barcodes",
-        "project_items",
-        f"{project_code}_{item_code}.png"
-    )
-
-    elements.append(
-        Paragraph(
-            "━━━━━━━━━━━━━━━━━━━━━━━━",
-            normal_style
+        barcode_file = os.path.join(
+            BASE_DIR,
+            "barcodes",
+            "project_items",
+            f"{project_code}_{item_code}.png"
         )
-    )
-
-    elements.append(
-        Spacer(1, 10)
-    )
-
-    elements.append(
-        Paragraph(
-            f"商品名：{item_name}",
-            normal_style
-        )
-    )
-
-    elements.append(
-        Paragraph(
-            f"商品コード：{item_code}",
-            normal_style
-        )
-    )
-
-    elements.append(
-        Spacer(1, 10)
-    )
-
-    if os.path.exists(barcode_file):
-
-        elements.append(
-            Image(
-                barcode_file,
-                width=250,
-                height=70
-            )
-        )
-
-    else:
 
         elements.append(
             Paragraph(
-                "バーコード画像なし",
+                "━━━━━━━━━━━━━━━━━━━━━━━━",
                 normal_style
             )
         )
 
-    elements.append(
-        Spacer(1, 20)
+        elements.append(
+            Spacer(1, 10)
+        )
+
+        elements.append(
+            Paragraph(
+                f"商品名：{item_name}",
+                normal_style
+            )
+        )
+
+        elements.append(
+            Paragraph(
+                f"商品コード：{item_code}",
+                normal_style
+            )
+        )
+
+        elements.append(
+            Spacer(1, 10)
+        )
+
+        if os.path.exists(barcode_file):
+
+            elements.append(
+                Image(
+                    barcode_file,
+                    width=250,
+                    height=70
+                )
+            )
+
+        else:
+
+            elements.append(
+                Paragraph(
+                    "バーコード画像なし",
+                    normal_style
+                )
+            )
+
+        elements.append(
+            Spacer(1, 20)
+        )
+
+    # =====================
+    # PDF生成
+    # =====================
+
+doc.build(elements)
+
+pdf_data = buffer.getvalue()
+
+st.success(
+        "PDF作成完了"
     )
 
-# =====================
-# PDF生成
-# =====================
-
-    doc.build(elements)
-
-    pdf_data = buffer.getvalue()
-
-    st.success("PDF作成完了")
-
-    st.download_button(
+st.download_button(
         label="⬇ PDFダウンロード",
         data=pdf_data,
         file_name=f"出荷指示書_{project_code}.pdf",
         mime="application/pdf"
     )
+
