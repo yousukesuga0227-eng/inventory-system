@@ -37,19 +37,20 @@ BASE_DIR = os.path.dirname(
 # -------------------------
 
 font_path = os.path.join(
-BASE_DIR,
-"inventory_system",
-"fonts",
-"NotoSansJP-VariableFont_wght.ttf"
+    BASE_DIR,
+    "fonts",
+    "NotoSansJP-VariableFont_wght.ttf"
 )
 
-st.write(font_path)
+st.write("BASE_DIR =", BASE_DIR)
+st.write("FONT =", font_path)
+st.write("存在する？", os.path.exists(font_path))
 
 pdfmetrics.registerFont(
-TTFont(
-"NotoSansJP",
-font_path
-)
+    TTFont(
+        "NotoSansJP",
+        font_path
+    )
 )
 
 # -------------------------
