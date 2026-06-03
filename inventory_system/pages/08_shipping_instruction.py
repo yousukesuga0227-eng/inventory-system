@@ -135,7 +135,6 @@ st.write(
 
 if st.button("📄 出荷指示書作成"):
 
-
     project = conn.execute(
     """
     SELECT *
