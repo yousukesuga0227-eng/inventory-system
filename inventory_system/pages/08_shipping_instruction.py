@@ -10,15 +10,13 @@ from reportlab.platypus import (
 SimpleDocTemplate,
 Paragraph,
 Spacer,
-Image,
-PageBreak
+Image
 )
 
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 
 from reportlab.lib.styles import getSampleStyleSheet
-from reportlab.lib import colors
 
 check_login()
 
@@ -26,38 +24,36 @@ conn = get_connection()
 
 st.title("📄 出荷指示書")
 
+# =====================
+
+# パス設定
+
+# =====================
+
 BASE_DIR = os.path.dirname(
-    os.path.dirname(__file__)
+os.path.dirname(**file**)
 )
 
-# -------------------------
+font_path = os.path.join(
+BASE_DIR,
+"fonts",
+"NotoSansJP-VariableFont_wght.ttf"
+)
 
 # フォント登録
 
-# -------------------------
-
-font_path = os.path.join(
-    BASE_DIR,
-    "fonts",
-    "NotoSansJP-VariableFont_wght.ttf"
-)
-
-st.write("BASE_DIR =", BASE_DIR)
-st.write("FONT =", font_path)
-st.write("存在する？", os.path.exists(font_path))
-
 pdfmetrics.registerFont(
-    TTFont(
-        "NotoSansJP",
-        font_path
-    )
+TTFont(
+"NotoSansJP",
+font_path
+)
 )
 
-# -------------------------
+# =====================
 
 # 案件取得
 
-# -------------------------
+# =====================
 
 projects = conn.execute(
 """
@@ -69,11 +65,13 @@ ORDER BY name
 
 if not projects:
 
-    st.warning(
-        "案件が登録されていません"
-    )
 
-    st.stop()
+ st.warning(
+    "案件が登録されていません"
+)
+
+st.stop()
+
 
 project_options = {
 project["name"]: project["id"]
@@ -89,44 +87,42 @@ project_id = project_options[
 selected_project
 ]
 
-# -------------------------
+# =====================
 
 # PDF作成
 
-# -------------------------
+# =====================
 
 if st.button("📄 出荷指示書作成"):
 
-        project = conn.execute(
-            """
-            SELECT *
-            FROM projects
-            WHERE id = ?
-            """,
-            (project_id,)
-        ).fetchone()
 
+ project = conn.execute(
+    """
+    SELECT *
+    FROM projects
+    WHERE id = ?
+    """,
+    (project_id,)
+).fetchone()
 
 project_code = project["code"]
 project_name = project["name"]
 
 items = conn.execute(
-        """
-        SELECT
-            code,
-            name
-        FROM items
-        WHERE project_id = ?
-        ORDER BY code
-        """,
-        (project_id,)
-    ).fetchall()
+    """
+    SELECT
+        code,
+        name
+    FROM items
+    WHERE project_id = ?
+    ORDER BY code
+    """,
+    (project_id,)
+).fetchall()
 
 buffer = BytesIO()
 
-doc = SimpleDocTemplate(
-        buffer
-    )
+doc = SimpleDocTemplate(buffer)
 
 styles = getSampleStyleSheet()
 
@@ -138,176 +134,131 @@ normal_style.fontName = "NotoSansJP"
 
 elements = []
 
-    # -------------------------
-    # ヘッダー
-    # -------------------------
+# =====================
+# タイトル
+# =====================
 
 elements.append(
-        Paragraph(
-            "出荷指示書",
-            title_style
-        )
+    Paragraph(
+        "出荷指示書",
+        title_style
     )
+)
 
 elements.append(
-        Spacer(1, 20)
-    )
+    Spacer(1, 20)
+)
 
 elements.append(
-        Paragraph(
-            f"案件名：{project_name}",
-            normal_style
-        )
+    Paragraph(
+        f"案件名：{project_name}",
+        normal_style
     )
+)
 
 elements.append(
-        Paragraph(
-            f"案件コード：{project_code}",
-            normal_style
-        )
+    Paragraph(
+        f"案件コード：{project_code}",
+        normal_style
     )
+)
 
 elements.append(
-        Paragraph(
-            f"発行日：{datetime.now().strftime('%Y/%m/%d')}",
-            normal_style
-        )
+    Paragraph(
+        f"発行日：{datetime.now().strftime('%Y/%m/%d')}",
+        normal_style
     )
+)
 
 elements.append(
-        Spacer(1, 20)
-    )
+    Spacer(1, 20)
+)
 
-    # -------------------------
-    # 商品一覧
-    # -------------------------
+# =====================
+# 商品一覧
+# =====================
 
 for item in items:
 
-        item_code = item["code"]
-        item_name = item["name"]
+    item_code = item["code"]
+    item_name = item["name"]
 
-        barcode_file = os.path.join(
-            BASE_DIR,
-            "barcodes",
-            "project_items",
-            f"{project_code}_{item_code}.png"
-        )
+    barcode_file = os.path.join(
+        BASE_DIR,
+        "barcodes",
+        "project_items",
+        f"{project_code}_{item_code}.png"
+    )
 
-        elements.append(
-            Paragraph(
-                "━━━━━━━━━━━━━━━━━━━━",
-                normal_style
-            )
-        )
-
-        elements.append(
-            Spacer(1, 10)
-        )
-
-        elements.append(
-            Paragraph(
-                f"商品コード：{item_code}",
-                normal_style
-            )
-        )
-
-        elements.append(
-            Paragraph(
-                f"商品名：{item_name}",
-                normal_style
-            )
-        )
-
-        elements.append(
-            Spacer(1, 10)
-        )
-
-        elements.append(
-            Paragraph(
-                "□ 確認",
-                normal_style
-            )
-        )
-
-        elements.append(
-            Spacer(1, 10)
-        )
-
-        if os.path.exists(
-            barcode_file
-        ):
-
-            elements.append(
-                Image(
-                    barcode_file,
-                    width=250,
-                    height=70
-                )
-            )
-
-        else:
-
-            elements.append(
-                Paragraph(
-                    "バーコード画像なし",
-                    normal_style
-                )
-            )
-
-        elements.append(
-            Spacer(1, 20)
-        )
-
-    # -------------------------
-    # 最終確認欄
-    # -------------------------
-
-elements.append(
+    elements.append(
         Paragraph(
-            "━━━━━━━━━━━━━━━━━━━━",
+            "━━━━━━━━━━━━━━━━━━━━━━━━",
             normal_style
         )
     )
 
-elements.append(
+    elements.append(
+        Spacer(1, 10)
+    )
+
+    elements.append(
+        Paragraph(
+            f"商品名：{item_name}",
+            normal_style
+        )
+    )
+
+    elements.append(
+        Paragraph(
+            f"商品コード：{item_code}",
+            normal_style
+        )
+    )
+
+    elements.append(
+        Spacer(1, 10)
+    )
+
+    if os.path.exists(barcode_file):
+
+        elements.append(
+            Image(
+                barcode_file,
+                width=250,
+                height=70
+            )
+        )
+
+    else:
+
+        elements.append(
+            Paragraph(
+                "バーコード画像なし",
+                normal_style
+            )
+        )
+
+    elements.append(
         Spacer(1, 20)
     )
 
-elements.append(
-        Paragraph(
-            "□ ピッキング完了",
-            normal_style
-        )
-    )
+# =====================
+# PDF生成
+# =====================
 
-elements.append(
-        Paragraph(
-            "□ 積込完了",
-            normal_style
-        )
-    )
-
-elements.append(
-        Paragraph(
-            "□ 出荷完了",
-            normal_style
-        )
-    )
-
-doc.build(
-        elements
-    )
+doc.build(elements)
 
 pdf_data = buffer.getvalue()
 
 st.success(
-        "PDF作成完了"
-    )
+    "PDF作成完了"
+)
 
 st.download_button(
-        label="⬇ PDFダウンロード",
-        data=pdf_data,
-        file_name=f"出荷指示書_{project_code}.pdf",
-        mime="application/pdf"
-    )
+    label="⬇ PDFダウンロード",
+    data=pdf_data,
+    file_name=f"出荷指示書_{project_code}.pdf",
+    mime="application/pdf"
+)
+
+
