@@ -51,9 +51,6 @@ pdfmetrics.registerFont(
     )
 )
 
-st.write("フォント登録OK")
-st.write("案件取得OK")
-
 # =====================
 # 案件取得
 # =====================
@@ -66,27 +63,6 @@ projects = conn.execute(
     """
 ).fetchall()
 
-# ←ここに追加
-
-st.write("案件数 =", len(projects))
-st.write(projects)
-
-if projects:
-
-    project_id = projects[0]["id"]
-
-    item_count = conn.execute(
-        """
-        SELECT COUNT(*)
-        FROM items
-        WHERE project_id = ?
-        """,
-        (project_id,)
-    ).fetchone()[0]
-
-    st.write("商品数 =", item_count)
-
-# ここから元のコード
 
 if not projects:
 
@@ -109,9 +85,6 @@ selected_project = st.selectbox(
 project_id = project_options[
     selected_project
 ]
-
-# 確認用
-st.write("選択案件ID =", project_id)
 
 selected_count = conn.execute(
     """
