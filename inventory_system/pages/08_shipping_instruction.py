@@ -40,8 +40,10 @@ font_path = os.path.join(
 BASE_DIR,
 "inventory_system",
 "fonts",
-"NotoSansJP-Regular.ttf"
+"NotoSansJP-VariableFont_wght.ttf"
 )
+
+st.write(font_path)
 
 pdfmetrics.registerFont(
 TTFont(
@@ -102,7 +104,7 @@ if st.button("📄 出荷指示書作成"):
         """,
         (project_id,)
     ).fetchone()
-    
+
 
 project_code = project["code"]
 project_name = project["name"]
