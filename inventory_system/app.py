@@ -58,6 +58,11 @@ USERS = {
     "role": "user"
 },
 
+"鮫島昇汰": {
+    "password": "0416",
+    "role": "admin"
+},
+
 }
 
 if "login" not in st.session_state:
