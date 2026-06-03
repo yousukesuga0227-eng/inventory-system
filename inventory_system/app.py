@@ -17,14 +17,30 @@ conn = get_connection()
 # ログイン
 # -------------------
 
-PASSWORD = "1234"
+USERS = {
+    "admin": {
+        "password": "1234",
+        "role": "admin"
+    },
+    "user": {
+        "password": "0000",
+        "role": "user"
+    }
+}
 
 if "login" not in st.session_state:
     st.session_state.login = False
 
+if "role" not in st.session_state:
+    st.session_state.role = None
+
 if not st.session_state.login:
 
     st.title("🔐 ログイン")
+
+    username = st.text_input(
+        "ユーザー名"
+    )
 
     password = st.text_input(
         "パスワード",
@@ -33,16 +49,28 @@ if not st.session_state.login:
 
     if st.button("ログイン"):
 
-        if password == PASSWORD:
+        if username in USERS:
 
-            st.session_state.login = True
+            if password == USERS[username]["password"]:
 
-            st.rerun()
+                st.session_state.login = True
+
+                st.session_state.role = (
+                    USERS[username]["role"]
+                )
+
+                st.rerun()
+
+            else:
+
+                st.error(
+                    "パスワードが違います"
+                )
 
         else:
 
             st.error(
-                "パスワードが違います"
+                "ユーザーが存在しません"
             )
 
     st.stop()
@@ -142,6 +170,18 @@ st.write("---")
 
 st.markdown("## 📋 システムメニュー")
 
+col1, col2 = st.columns([8, 1])
+
+with col2:
+
+    if st.button("🚪ログアウト"):
+
+        st.session_state.login = False
+
+        st.session_state.role = None
+
+        st.rerun()
+
 col1, col2 = st.columns(2)
 
 with col1:
@@ -179,5 +219,6 @@ with col2:
     )
 
 st.caption(
-    "大阪陸運 八尾倉庫 在庫管理システム Ver 1.0"
+    "大阪陸運 八尾倉庫 在庫管理システム Ver 1.001"
 )
+
