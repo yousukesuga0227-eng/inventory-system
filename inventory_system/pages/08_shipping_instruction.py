@@ -110,6 +110,32 @@ project_id = project_options[
 selected_project
 ]
 
+selected_project = st.selectbox(
+    "案件選択",
+    list(project_options.keys())
+)
+
+project_id = project_options[
+    selected_project
+]
+
+# 確認用
+st.write("選択案件ID =", project_id)
+
+selected_count = conn.execute(
+    """
+    SELECT COUNT(*)
+    FROM items
+    WHERE project_id = ?
+    """,
+    (project_id,)
+).fetchone()[0]
+
+st.write(
+    "選択案件の商品数 =",
+    selected_count
+)
+
 # =====================
 
 # PDF作成
@@ -118,66 +144,63 @@ selected_project
 
 if st.button("📄 出荷指示書作成"):
 
+    project = conn.execute(
+        """
+        SELECT *
+        FROM projects
+        WHERE id = ?
+        """,
+        (project_id,)
+    ).fetchone()
 
- project = conn.execute(
-    """
-    SELECT *
-    FROM projects
-    WHERE id = ?
-    """,
-    (project_id,)
-).fetchone()
+    project_code = project["code"]
+    project_name = project["name"]
 
-project_code = project["code"]
-project_name = project["name"]
+    items = conn.execute(
+        """
+        SELECT
+            code,
+            name
+        FROM items
+        WHERE project_id = ?
+        ORDER BY code
+        """,
+        (project_id,)
+    ).fetchall()
 
-items = conn.execute(
-    """
-    SELECT
-        code,
-        name
-    FROM items
-    WHERE project_id = ?
-    ORDER BY code
-    """,
-    (project_id,)
-).fetchall()
+    buffer = BytesIO()
 
-buffer = BytesIO()
+    doc = SimpleDocTemplate(buffer)
 
-doc = SimpleDocTemplate(buffer)
+    styles = getSampleStyleSheet()
 
-styles = getSampleStyleSheet()
+    title_style = styles["Title"]
+    title_style.fontName = "NotoSansJP"
 
-title_style = styles["Title"]
-title_style.fontName = "NotoSansJP"
+    normal_style = styles["BodyText"]
+    normal_style.fontName = "NotoSansJP"
 
-normal_style = styles["BodyText"]
-normal_style.fontName = "NotoSansJP"
+    elements = []
 
-elements = []
-
-# =====================
-# タイトル
-# =====================
-
-elements.append(
-    Paragraph(
-        "出荷指示書",
-        title_style
+    elements.append(
+        Paragraph(
+            "出荷指示書",
+            title_style
+        )
     )
-)
 
-elements.append(
-    Spacer(1, 20)
-)
-
-elements.append(
-    Paragraph(
-        f"案件名：{project_name}",
-        normal_style
+    elements.append(
+        Spacer(1, 20)
     )
-)
+
+    elements.append(
+        Paragraph(
+            f"案件名：{project_name}",
+            normal_style
+        )
+    )
+
+    # ↓↓↓ここから最後まで全部インデント↓↓↓
 
 elements.append(
     Paragraph(
@@ -269,18 +292,15 @@ for item in items:
 # PDF生成
 # =====================
 
-doc.build(elements)
+    doc.build(elements)
 
-pdf_data = buffer.getvalue()
+    pdf_data = buffer.getvalue()
 
-st.success(
-    "PDF作成完了"
-)
+    st.success("PDF作成完了")
 
-st.download_button(
-    label="⬇ PDFダウンロード",
-    data=pdf_data,
-    file_name=f"出荷指示書_{project_code}.pdf",
-    mime="application/pdf"
-)
-
+    st.download_button(
+        label="⬇ PDFダウンロード",
+        data=pdf_data,
+        file_name=f"出荷指示書_{project_code}.pdf",
+        mime="application/pdf"
+    )
