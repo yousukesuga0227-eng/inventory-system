@@ -102,15 +102,6 @@ project_options = {
 }
 
 selected_project = st.selectbox(
-"案件選択",
-list(project_options.keys())
-)
-
-project_id = project_options[
-selected_project
-]
-
-selected_project = st.selectbox(
     "案件選択",
     list(project_options.keys())
 )
