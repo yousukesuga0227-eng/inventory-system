@@ -41,7 +41,23 @@ USERS = {
 "鮫島": {
     "password": "0904",
     "role": "admin"
-}
+},
+
+"山縣": {
+    "password": "1111",
+    "role": "user"
+},
+
+"小寺": {
+    "password": "2222",
+    "role": "user"
+},
+
+"河野": {
+    "password": "3333",
+    "role": "user"
+},
+
 }
 
 if "login" not in st.session_state:
