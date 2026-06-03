@@ -31,7 +31,9 @@ st.title("📄 出荷指示書")
 # =====================
 
 BASE_DIR = os.path.dirname(
-os.path.dirname(**file**)
+os.path.dirname(
+   __file__
+)
 )
 
 font_path = os.path.join(
@@ -260,5 +262,4 @@ st.download_button(
     file_name=f"出荷指示書_{project_code}.pdf",
     mime="application/pdf"
 )
-
 
