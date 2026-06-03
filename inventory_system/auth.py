@@ -10,3 +10,5 @@ def check_login():
         st.error("ログインしてください")
 
         st.switch_page("app.py")
+
+        st.stop()

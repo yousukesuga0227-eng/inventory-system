@@ -5,6 +5,10 @@ from barcode.writer import ImageWriter
 from database import get_connection
 conn = get_connection()
 
+from auth import check_login
+
+check_login()
+
 st.title("案件管理")
 
 code = st.text_input("案件コード")
