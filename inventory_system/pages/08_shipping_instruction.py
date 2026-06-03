@@ -55,32 +55,50 @@ st.write("フォント登録OK")
 st.write("案件取得OK")
 
 # =====================
-
 # 案件取得
-
 # =====================
 
 projects = conn.execute(
-"""
-SELECT *
-FROM projects
-ORDER BY name
-"""
+    """
+    SELECT *
+    FROM projects
+    ORDER BY name
+    """
 ).fetchall()
+
+# ←ここに追加
+
+st.write("案件数 =", len(projects))
+st.write(projects)
+
+if projects:
+
+    project_id = projects[0]["id"]
+
+    item_count = conn.execute(
+        """
+        SELECT COUNT(*)
+        FROM items
+        WHERE project_id = ?
+        """,
+        (project_id,)
+    ).fetchone()[0]
+
+    st.write("商品数 =", item_count)
+
+# ここから元のコード
 
 if not projects:
 
+    st.warning(
+        "案件が登録されていません"
+    )
 
- st.warning(
-    "案件が登録されていません"
-)
-
-st.stop()
-
+    st.stop()
 
 project_options = {
-project["name"]: project["id"]
-for project in projects
+    project["name"]: project["id"]
+    for project in projects
 }
 
 selected_project = st.selectbox(
