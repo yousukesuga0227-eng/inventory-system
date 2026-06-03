@@ -1,3 +1,9 @@
+check_login()
+
+st.write("ページ読込OK")
+
+conn = get_connection()
+
 import streamlit as st
 from database import get_connection
 from auth import check_login
@@ -45,49 +51,28 @@ BASE_DIR,
 # フォント登録
 
 pdfmetrics.registerFont(
-TTFont(
-"NotoSansJP",
-font_path
+    TTFont(
+        "NotoSansJP",
+        font_path
+    )
 )
-)
+
+st.write("フォント登録OK")
 
 # =====================
-
 # 案件取得
-
 # =====================
 
 projects = conn.execute(
-"""
-SELECT *
-FROM projects
-ORDER BY name
-"""
+    """
+    SELECT *
+    FROM projects
+    ORDER BY name
+    """
 ).fetchall()
 
-if not projects:
-
-
- st.warning(
-    "案件が登録されていません"
-)
-
-st.stop()
-
-
-project_options = {
-project["name"]: project["id"]
-for project in projects
-}
-
-selected_project = st.selectbox(
-"案件選択",
-list(project_options.keys())
-)
-
-project_id = project_options[
-selected_project
-]
+st.write("案件取得OK")
+st.write(projects)
 
 # =====================
 

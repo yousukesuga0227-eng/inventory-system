@@ -225,11 +225,6 @@ with col2:
     label="📄 出荷指示書"
 )
 
-st.page_link(
-    "pages/08_shipping_instruction.py",
-    label="📄 出荷指示書"
-)
-
 st.caption(
     "大阪陸運 八尾倉庫 在庫管理システム Ver 1.001"
 )
