@@ -18,14 +18,25 @@ conn = get_connection()
 # -------------------
 
 USERS = {
-    "admin": {
-        "password": "1234",
-        "role": "admin"
-    },
-    "user": {
-        "password": "0000",
-        "role": "user"
-    }
+"admin": {
+"password": "1234",
+"role": "admin"
+},
+
+"user": {
+    "password": "0000",
+    "role": "user"
+},
+
+"壽賀": {
+    "password": "0227",
+    "role": "admin"
+},
+
+"若杉": {
+    "password": "0000",
+    "role": "admin"
+}
 }
 
 if "login" not in st.session_state:

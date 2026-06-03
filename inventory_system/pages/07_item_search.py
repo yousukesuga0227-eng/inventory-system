@@ -7,6 +7,9 @@ check_login()
 conn = get_connection()
 
 st.title("商品検索")
+st.success(
+    f"ログイン中：{st.session_state.username}"
+)
 
 # バーコード入力
 barcode = st.text_input(
