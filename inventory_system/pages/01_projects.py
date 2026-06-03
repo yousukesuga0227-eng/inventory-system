@@ -5,9 +5,9 @@ from barcode.writer import ImageWriter
 from database import get_connection
 conn = get_connection()
 
-from auth import check_login
+from auth import check_admin
 
-check_login()
+check_admin()
 
 st.title("案件管理")
 

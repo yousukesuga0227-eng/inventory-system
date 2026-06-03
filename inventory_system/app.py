@@ -186,15 +186,17 @@ col1, col2 = st.columns(2)
 
 with col1:
 
-    st.page_link(
-        "pages/01_projects.py",
-        label="📁 案件管理"
-    )
+    if st.session_state.role == "admin":
 
-    st.page_link(
-        "pages/02_items.py",
-        label="📦 商品管理"
-    )
+        st.page_link(
+            "pages/01_projects.py",
+            label="📁 案件管理"
+        )
+
+        st.page_link(
+            "pages/02_items.py",
+            label="📦 商品管理"
+        )
 
     st.page_link(
         "pages/03_stock.py",
@@ -221,4 +223,3 @@ with col2:
 st.caption(
     "大阪陸運 八尾倉庫 在庫管理システム Ver 1.001"
 )
-

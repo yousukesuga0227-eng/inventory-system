@@ -3,9 +3,9 @@ import os
 import barcode
 from barcode.writer import ImageWriter
 from database import get_connection
-from auth import check_login
+from auth import check_admin
 
-check_login()
+check_admin()
 
 
 conn = get_connection()

@@ -12,3 +12,16 @@ def check_login():
         st.switch_page("app.py")
 
         st.stop()
+
+
+def check_admin():
+
+    check_login()
+
+    if st.session_state.role != "admin":
+
+        st.error(
+            "管理者権限が必要です"
+        )
+
+        st.stop()
