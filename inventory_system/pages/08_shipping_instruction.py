@@ -141,7 +141,7 @@ if st.button("📄 出荷指示書作成"):
         FROM projects
         WHERE id = ?
         """,
-        (project_id,)
+        (project_id,)   
     ).fetchone()
 
     project_code = project["code"]
