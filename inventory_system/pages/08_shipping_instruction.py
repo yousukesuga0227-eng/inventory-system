@@ -179,104 +179,104 @@ if st.button("📄 出荷指示書作成"):
 
 # タイトル
 
-elements.append(
-    Paragraph(
-        "出荷指示書",
-        title_style
-    )
-)
-
-elements.append(
-    Spacer(1, 20)
-)
-
-elements.append(
-    Paragraph(
-        f"案件名：{project_name}",
-        normal_style
-    )
-)
-
-elements.append(
-    Paragraph(
-        f"案件コード：{project_code}",
-        normal_style
-    )
-)
-
-elements.append(
-    Paragraph(
-        f"発行日：{datetime.now().strftime('%Y/%m/%d')}",
-        normal_style
-    )
-)
-
-elements.append(
-    Spacer(1, 20)
-)
-
-# 商品一覧
-
-for item in items:
-
-    item_code = item["code"]
-    item_name = item["name"]
-
-    barcode_file = os.path.join(
-        BASE_DIR,
-        "barcodes",
-        "project_items",
-        f"{project_code}_{item_code}.png"
-    )
-
     elements.append(
         Paragraph(
-            f"商品名：{item_name}",
-            normal_style
+            "出荷指示書",
+            title_style
         )
     )
-
-    elements.append(
-        Paragraph(
-            f"商品コード：{item_code}",
-            normal_style
-        )
-    )
-
-    elements.append(
-        Spacer(1, 10)
-    )
-
-    if os.path.exists(barcode_file):
-
-        elements.append(
-            Image(
-                barcode_file,
-                width=250,
-                height=70
-            )
-        )
-
-    else:
-
-        elements.append(
-            Paragraph(
-                "バーコード画像なし",
-                normal_style
-            )
-        )
 
     elements.append(
         Spacer(1, 20)
     )
 
-doc.build(elements)
+    elements.append(
+        Paragraph(
+            f"案件名：{project_name}",
+            normal_style
+        )
+    )
 
-pdf_data = buffer.getvalue()
+    elements.append(
+        Paragraph(
+            f"案件コード：{project_code}",
+            normal_style
+        )
+    )
 
-st.download_button(
-    label="⬇ PDFダウンロード",
-    data=pdf_data,
-    file_name=f"出荷指示書_{project_code}.pdf",
-    mime="application/pdf"
-)
+    elements.append(
+        Paragraph(
+            f"発行日：{datetime.now().strftime('%Y/%m/%d')}",
+            normal_style
+        )
+    )
+
+    elements.append(
+        Spacer(1, 20)
+    )
+
+    # 商品一覧
+
+    for item in items:
+
+        item_code = item["code"]
+        item_name = item["name"]
+
+        barcode_file = os.path.join(
+            BASE_DIR,
+            "barcodes",
+            "project_items",
+            f"{project_code}_{item_code}.png"
+        )
+
+        elements.append(
+            Paragraph(
+                f"商品名：{item_name}",
+                normal_style
+            )
+        )
+
+        elements.append(
+            Paragraph(
+                f"商品コード：{item_code}",
+                normal_style
+            )
+        )
+
+        elements.append(
+            Spacer(1, 10)
+        )
+
+        if os.path.exists(barcode_file):
+
+            elements.append(
+                Image(
+                    barcode_file,
+                    width=250,
+                    height=70
+                )
+            )
+
+        else:
+
+            elements.append(
+                Paragraph(
+                    "バーコード画像なし",
+                    normal_style
+                )
+            )
+
+        elements.append(
+            Spacer(1, 20)
+        )
+
+    doc.build(elements)
+
+    pdf_data = buffer.getvalue()
+
+    st.download_button(
+        label="⬇ PDFダウンロード",
+        data=pdf_data,
+        file_name=f"出荷指示書_{project_code}.pdf",
+        mime="application/pdf"
+    )
