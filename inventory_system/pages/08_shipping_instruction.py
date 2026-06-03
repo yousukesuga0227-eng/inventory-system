@@ -127,59 +127,55 @@ st.write(
     selected_count
 )
 
-# =====================
-
-# PDF作成
-
-# =====================
-
 if st.button("📄 出荷指示書作成"):
 
     project = conn.execute(
-    """
-    SELECT *
-    FROM projects
-    WHERE id = ?
-    """,
-    (project_id,)
-).fetchone()
+        """
+        SELECT *
+        FROM projects
+        WHERE id = ?
+        """,
+        (project_id,)
+    ).fetchone()
 
-project_code = project["code"]
-project_name = project["name"]
+    project_code = project["code"]
+    project_name = project["name"]
 
-items = conn.execute(
-    """
-    SELECT
-        code,
-        name
-    FROM items
-    WHERE project_id = ?
-    ORDER BY code
-    """,
-    (project_id,)
-).fetchall()
+    items = conn.execute(
+        """
+        SELECT
+            code,
+            name
+        FROM items
+        WHERE project_id = ?
+        ORDER BY code
+        """,
+        (project_id,)
+    ).fetchall()
 
-if not items:
+    if not items:
 
-    st.warning(
-        "この案件には商品が登録されていません"
-    )
+        st.warning(
+            "この案件には商品が登録されていません"
+        )
 
-    st.stop()
+        st.stop()
 
-buffer = BytesIO()
+    buffer = BytesIO()
 
-doc = SimpleDocTemplate(buffer)
+    doc = SimpleDocTemplate(buffer)
 
-styles = getSampleStyleSheet()
+    styles = getSampleStyleSheet()
 
-title_style = styles["Title"]
-title_style.fontName = "NotoSansJP"
+    title_style = styles["Title"]
+    title_style.fontName = "NotoSansJP"
 
-normal_style = styles["BodyText"]
-normal_style.fontName = "NotoSansJP"
+    normal_style = styles["BodyText"]
+    normal_style.fontName = "NotoSansJP"
 
-elements = []
+    elements = []
+
+# 以降全部このインデントのまま続く
 
 # タイトル
 
