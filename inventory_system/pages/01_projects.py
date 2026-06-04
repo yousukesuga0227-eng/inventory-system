@@ -174,7 +174,10 @@ for row in rows:
         {
             "ID": row["id"],
             "案件コード": row["code"],
-            "案件名": row["name"]
+            "案件名": row["name"],
+            "入庫予定": row["receive_date"],
+            "出荷予定": row["shipping_date"],
+            "状態": row["status"]
         }
     )
 
