@@ -1,6 +1,7 @@
 import streamlit as st
 import os
 import barcode
+from datetime import datetime
 from barcode.writer import ImageWriter
 from database import get_connection
 conn = get_connection()
@@ -17,6 +18,29 @@ st.success(
 code = st.text_input("案件コード")
 name = st.text_input("案件名")
 
+receive_date = st.date_input(
+    "入庫予定日"
+)
+
+shipping_date = st.date_input(
+    "出荷予定日"
+)
+
+status = st.selectbox(
+    "案件状態",
+    [
+        "未着荷",
+        "入庫済",
+        "出荷待ち",
+        "出荷済",
+        "完了"
+    ]
+)
+
+memo = st.text_area(
+    "備考"
+)
+
 if st.button("案件登録"):
 
     if not code or not name:
@@ -31,13 +55,27 @@ if st.button("案件登録"):
             """
             INSERT INTO projects(
                 code,
-                name
+                name,
+                receive_date,
+                shipping_date,
+                status,
+                memo,
+                created_at
             )
-            VALUES (?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
-            (code, name)
+            (
+                code,
+                name,
+                str(receive_date),
+                str(shipping_date),
+                status,
+                memo,
+                datetime.now().strftime(
+                    "%Y-%m-%d %H:%M:%S"
+                )
+            )
         )
-
         conn.commit()
 
         # フォルダ作成
