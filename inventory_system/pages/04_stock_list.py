@@ -11,19 +11,48 @@ st.success(
     f"ログイン中：{st.session_state.username}"
 )
 
-# 案件一覧取得
+# =====================
+# フィルタ用データ取得
+# =====================
+
 projects = conn.execute(
-    "SELECT DISTINCT name FROM projects"
+    """
+    SELECT DISTINCT name
+    FROM projects
+    ORDER BY name
+    """
 ).fetchall()
 
 project_names = ["すべて"] + [
     p["name"] for p in projects
 ]
 
-selected_project = st.selectbox(
-    "案件フィルタ",
-    project_names
+# =====================
+# フィルタ
+# =====================
+
+st.subheader("絞り込み")
+
+col1, col2 = st.columns(2)
+
+with col1:
+    selected_project = st.selectbox(
+        "案件フィルタ",
+        project_names
+    )
+
+with col2:
+    search_text = st.text_input(
+        "商品コード / 商品名で検索"
+    )
+
+show_zero_stock = st.checkbox(
+    "在庫0の商品も表示する"
 )
+
+# =====================
+# 在庫一覧取得
+# =====================
 
 query = """
 SELECT
@@ -31,21 +60,15 @@ SELECT
     p.name AS project_name,
     i.code AS item_code,
     i.name AS item_name,
-    
-    SUM(
-        CASE
-            WHEN s.type = 'IN'
-            THEN s.qty
-            ELSE -s.qty
-        END
-    ) AS total_qty
-FROM stock_logs s
+    COALESCE(SUM(s.qty), 0) AS total_qty
+FROM items i
 
 LEFT JOIN projects p
-ON s.project_id = p.id
+    ON i.project_id = p.id
 
-LEFT JOIN items i
-ON s.item_id = i.id
+LEFT JOIN stock_logs s
+    ON s.item_id = i.id
+    AND s.project_id = p.id
 
 WHERE 1=1
 """
@@ -60,6 +83,18 @@ if selected_project != "すべて":
 
     params.append(selected_project)
 
+if search_text:
+
+    query += """
+    AND (
+        i.code LIKE ?
+        OR i.name LIKE ?
+    )
+    """
+
+    params.append(f"%{search_text}%")
+    params.append(f"%{search_text}%")
+
 query += """
 
 GROUP BY
@@ -67,14 +102,15 @@ GROUP BY
     p.name,
     i.code,
     i.name
+"""
 
-HAVING SUM(
-    CASE
-        WHEN s.type = 'IN'
-        THEN s.qty
-        ELSE -s.qty
-    END
-) > 0
+if not show_zero_stock:
+
+    query += """
+HAVING COALESCE(SUM(s.qty), 0) > 0
+"""
+
+query += """
 
 ORDER BY
     p.code,
@@ -90,27 +126,89 @@ data = []
 
 for row in rows:
 
-    data.append({
-        "案件コード": row["project_code"],
-        "案件名": row["project_name"],
-        "商品コード": row["item_code"],
-        "商品名": row["item_name"],
-        "在庫数": row["total_qty"]
-    })
+    stock_qty = row["total_qty"]
+
+    if stock_qty < 0:
+        stock_status = "マイナス在庫"
+    elif stock_qty == 0:
+        stock_status = "在庫なし"
+    else:
+        stock_status = "在庫あり"
+
+    data.append(
+        {
+            "案件コード": row["project_code"],
+            "案件名": row["project_name"],
+            "商品コード": row["item_code"],
+            "商品名": row["item_name"],
+            "在庫数": stock_qty,
+            "状態": stock_status
+        }
+    )
 
 df = pd.DataFrame(data)
 
+# =====================
+# 集計表示
+# =====================
+
+if df.empty:
+
+    total_items = 0
+    total_stock = 0
+    zero_count = 0
+
+else:
+
+    total_items = len(df)
+    total_stock = int(df["在庫数"].sum())
+    zero_count = int((df["在庫数"] == 0).sum())
+
+col1, col2, col3 = st.columns(3)
+
+with col1:
+    st.metric(
+        "表示商品数",
+        f"{total_items}件"
+    )
+
+with col2:
+    st.metric(
+        "総在庫数",
+        f"{total_stock}"
+    )
+
+with col3:
+    st.metric(
+        "在庫0件数",
+        f"{zero_count}件"
+    )
+
+# =====================
+# 一覧表示
+# =====================
+
 st.dataframe(
     df,
-    use_container_width=True
+    use_container_width=True,
+    hide_index=True
 )
+
+# =====================
+# CSVダウンロード
+# =====================
+
 csv = df.to_csv(
     index=False
-).encode("utf-8-sig")
+).encode("cp932", errors="ignore")
 
 st.download_button(
-    label="CSVダウンロード",
+    label="在庫一覧CSVダウンロード",
     data=csv,
     file_name="stock_list.csv",
-    mime="text/csv"
+    mime="text/csv",
+    disabled=df.empty
 )
+
+if df.empty:
+    st.info("表示できる在庫がありません")

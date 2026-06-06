@@ -1,0 +1,25 @@
+﻿# Local tools
+check_db.py
+inventory_system/migrate_sqlite_to_supabase.py
+
+# Notification app / local side project
+inventory_system/shark/
+
+# Local database
+inventory_system/data/
+*.db
+*.sqlite
+*.sqlite3
+
+# Python
+__pycache__/
+*.pyc
+
+# Virtual environment
+venv/
+.venv/
+
+# Secrets
+.env
+.streamlit/secrets.toml
+inventory_system/.streamlit/secrets.toml

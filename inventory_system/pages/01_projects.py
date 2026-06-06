@@ -3,7 +3,7 @@ import os
 import barcode
 from datetime import datetime
 from barcode.writer import ImageWriter
-from database import get_connection
+from database import get_connection, log_action
 conn = get_connection()
 
 from auth import check_admin
@@ -78,6 +78,19 @@ if st.button("案件登録"):
         )
         conn.commit()
 
+        new_project_id = conn.execute(
+            "SELECT last_insert_rowid()"
+        ).fetchone()[0]
+
+        log_action(
+            st.session_state.username,
+            "案件登録",
+            "projects",
+            new_project_id,
+            name,
+            f"案件コード: {code}"
+        )
+        
         # フォルダ作成
         os.makedirs(
             "barcodes/projects",

@@ -1,4 +1,44 @@
-venv/
+# Python
 __pycache__/
 *.pyc
+
+# Virtual environment
+venv/
+.venv/
+env/
+
+# Local database
 inventory_system/data/
+*.db
+*.sqlite
+*.sqlite3
+
+# Secrets
+.env
+.streamlit/secrets.toml
+inventory_system/.streamlit/secrets.toml
+
+# Generated files
+inventory_system/barcodes/
+barcodes/
+*.log
+
+# Local check / migration tools
+check_db.py
+inventory_system/check_db.py
+inventory_system/migrate_sqlite_to_supabase.py
+
+# Editor / OS
+.vscode/
+.DS_Store
+Thumbs.db
+
+check_db.py
+inventory_system/migrate_sqlite_to_supabase.py
+
+../check_db.py
+migrate_sqlite_to_supabase.py
+
+shark/
+
+E:\inventory_app

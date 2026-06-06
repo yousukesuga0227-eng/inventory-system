@@ -7,16 +7,24 @@ from io import BytesIO
 from datetime import datetime
 
 from reportlab.platypus import (
-SimpleDocTemplate,
-Paragraph,
-Spacer,
-Image
+    SimpleDocTemplate,
+    Paragraph,
+    Spacer,
+    Image,
+    Table,
+    TableStyle
 )
+
+from reportlab.lib import colors
+from reportlab.lib.pagesizes import A4, landscape
+from reportlab.lib.units import mm
+from reportlab.graphics.barcode import code128
 
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 
 from reportlab.lib.styles import getSampleStyleSheet
+
 
 check_login()
 
@@ -28,25 +36,22 @@ st.success(
 )
 
 # =====================
-
 # パス設定
-
 # =====================
 
 BASE_DIR = os.path.dirname(
-os.path.dirname(
-   __file__
-)
+    os.path.dirname(
+        __file__
+    )
 )
 
 font_path = os.path.join(
-BASE_DIR,
-"fonts",
-"NotoSansJP-VariableFont_wght.ttf"
+    BASE_DIR,
+    "fonts",
+    "NotoSansJP-VariableFont_wght.ttf"
 )
 
 # フォント登録
-
 pdfmetrics.registerFont(
     TTFont(
         "NotoSansJP",
@@ -65,7 +70,6 @@ projects = conn.execute(
     ORDER BY name
     """
 ).fetchall()
-
 
 if not projects:
 
@@ -103,6 +107,10 @@ st.write(
     selected_count
 )
 
+# =====================
+# PDF作成
+# =====================
+
 if st.button("📄 出荷指示書作成"):
 
     project = conn.execute(
@@ -116,6 +124,7 @@ if st.button("📄 出荷指示書作成"):
 
     project_code = project["code"]
     project_name = project["name"]
+    shipping_date = project["shipping_date"] if "shipping_date" in project.keys() else ""
 
     items = conn.execute(
         """
@@ -139,7 +148,14 @@ if st.button("📄 出荷指示書作成"):
 
     buffer = BytesIO()
 
-    doc = SimpleDocTemplate(buffer)
+    doc = SimpleDocTemplate(
+        buffer,
+        pagesize=landscape(A4),
+        rightMargin=10 * mm,
+        leftMargin=10 * mm,
+        topMargin=10 * mm,
+        bottomMargin=10 * mm
+    )
 
     styles = getSampleStyleSheet()
 
@@ -148,12 +164,37 @@ if st.button("📄 出荷指示書作成"):
 
     normal_style = styles["BodyText"]
     normal_style.fontName = "NotoSansJP"
+    normal_style.fontSize = 8
+    normal_style.leading = 10
 
     elements = []
 
-# 以降全部このインデントのまま続く
+    # =====================
+    # ロゴ
+    # =====================
 
-# タイトル
+    logo_path = os.path.join(
+        BASE_DIR,
+        "logo.png"
+    )
+
+    if os.path.exists(logo_path):
+
+        elements.append(
+            Image(
+                logo_path,
+                width=55 * mm,
+                height=8 * mm
+            )
+        )
+
+        elements.append(
+            Spacer(1, 8)
+        )
+
+    # =====================
+    # タイトル
+    # =====================
 
     elements.append(
         Paragraph(
@@ -163,88 +204,187 @@ if st.button("📄 出荷指示書作成"):
     )
 
     elements.append(
-        Spacer(1, 20)
+        Spacer(1, 10)
     )
 
-    elements.append(
-        Paragraph(
-            f"案件名：{project_name}",
-            normal_style
+    # =====================
+    # 案件情報テーブル
+    # =====================
+
+    info_data = [
+        [
+            "案件名",
+            project_name,
+            "案件コード",
+            project_code
+        ],
+        [
+            "出荷予定日",
+            str(shipping_date),
+            "発行日",
+            datetime.now().strftime("%Y/%m/%d")
+        ],
+        [
+            "発行者",
+            st.session_state.username,
+            "確認者",
+            ""
+        ],
+    ]
+
+    info_table = Table(
+        info_data,
+        colWidths=[
+            25 * mm,
+            90 * mm,
+            25 * mm,
+            60 * mm
+        ]
+    )
+
+    info_table.setStyle(
+        TableStyle(
+            [
+                ("FONTNAME", (0, 0), (-1, -1), "NotoSansJP"),
+                ("FONTSIZE", (0, 0), (-1, -1), 9),
+                ("GRID", (0, 0), (-1, -1), 0.5, colors.black),
+                ("BACKGROUND", (0, 0), (0, -1), colors.lightgrey),
+                ("BACKGROUND", (2, 0), (2, -1), colors.lightgrey),
+                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 6),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+            ]
         )
     )
 
-    elements.append(
-        Paragraph(
-            f"案件コード：{project_code}",
-            normal_style
-        )
-    )
+    elements.append(info_table)
 
     elements.append(
-        Paragraph(
-            f"発行日：{datetime.now().strftime('%Y/%m/%d')}",
-            normal_style
-        )
+        Spacer(1, 15)
     )
 
-    elements.append(
-        Spacer(1, 20)
-    )
+    # =====================
+    # 商品一覧テーブル
+    # =====================
 
-    # 商品一覧
+    table_data = [
+        [
+            "No.",
+            "商品コード",
+            "商品名",
+            "バーコード",
+            "ピッキング",
+            "検品",
+            "積込"
+        ]
+    ]
 
-    for item in items:
+    for index, item in enumerate(items, start=1):
 
         item_code = item["code"]
         item_name = item["name"]
 
-        barcode_file = os.path.join(
-            BASE_DIR,
-            "barcodes",
-            "project_items",
-            f"{project_code}_{item_code}.png"
+        # 出荷指示書のバーコードは商品コードのみ
+        barcode_value = str(item_code)
+
+        barcode = code128.Code128(
+            barcode_value,
+            barHeight=18 * mm,
+            barWidth=0.45,
+            humanReadable=True
         )
 
-        elements.append(
-            Paragraph(
-                f"商品名：{item_name}",
-                normal_style
-            )
+        table_data.append(
+            [
+                str(index),
+                item_code,
+                Paragraph(item_name, normal_style),
+                barcode,
+                "□",
+                "□",
+                "□"
+            ]
         )
 
-        elements.append(
-            Paragraph(
-                f"商品コード：{item_code}",
-                normal_style
-            )
+
+    item_table = Table(
+        table_data,
+        colWidths=[
+            10 * mm,
+            35 * mm,
+            70 * mm,
+            65 * mm,
+            22 * mm,
+            18 * mm,
+            18 * mm
+        ],
+        repeatRows=1
+    )
+
+    item_table.setStyle(
+        TableStyle(
+            [
+                ("FONTNAME", (0, 0), (-1, -1), "NotoSansJP"),
+                ("FONTSIZE", (0, 0), (-1, -1), 8),
+                ("GRID", (0, 0), (-1, -1), 0.5, colors.black),
+                ("BACKGROUND", (0, 0), (-1, 0), colors.lightgrey),
+                ("ALIGN", (0, 0), (1, -1), "CENTER"),
+                ("ALIGN", (4, 1), (-1, -1), "CENTER"),
+                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 4),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+                ("TOPPADDING", (0, 0), (-1, -1), 5),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+            ]
         )
+    )
 
-        elements.append(
-            Spacer(1, 10)
+    elements.append(item_table)
+
+    elements.append(
+        Spacer(1, 18)
+    )
+
+    # =====================
+    # 備考・確認欄
+    # =====================
+
+    memo_table = Table(
+        [
+            [
+                "備考",
+                ""
+            ],
+            [
+                "確認欄",
+                "□ ピッキング完了　　□ 検品完了　　□ 積込完了"
+            ]
+        ],
+        colWidths=[
+            25 * mm,
+            215 * mm
+        ],
+        rowHeights=[
+            20 * mm,
+            12 * mm
+        ]
+    )
+
+    memo_table.setStyle(
+        TableStyle(
+            [
+                ("FONTNAME", (0, 0), (-1, -1), "NotoSansJP"),
+                ("FONTSIZE", (0, 0), (-1, -1), 9),
+                ("GRID", (0, 0), (-1, -1), 0.5, colors.black),
+                ("BACKGROUND", (0, 0), (0, -1), colors.lightgrey),
+                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 6),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+            ]
         )
+    )
 
-        if os.path.exists(barcode_file):
-
-            elements.append(
-                Image(
-                    barcode_file,
-                    width=250,
-                    height=70
-                )
-            )
-
-        else:
-
-            elements.append(
-                Paragraph(
-                    "バーコード画像なし",
-                    normal_style
-                )
-            )
-
-        elements.append(
-            Spacer(1, 20)
-        )
+    elements.append(memo_table)
 
     doc.build(elements)
 

@@ -12,30 +12,28 @@ st.success(
 
 # 案件取得
 projects = conn.execute(
-    "SELECT * FROM projects"
+    """
+    SELECT *
+    FROM projects
+    ORDER BY name
+    """
 ).fetchall()
 
-# 商品取得
-items = conn.execute(
-    "SELECT * FROM items"
-).fetchall()
+if not projects:
+    st.warning("先に案件を登録してください")
+    st.stop()
 
 # 案件辞書
 project_map = {
-    f"{p['code']} - {p['name']}": p['id']
+    f"{p['code']} - {p['name']}": p["id"]
     for p in projects
-}
-
-# 商品辞書
-item_map = {
-    f"{i['code']} - {i['name']}": i['id']
-    for i in items
 }
 
 # 種別
 stock_type = st.radio(
     "種別",
-    ["入庫", "出庫"]
+    ["入庫", "出庫"],
+    horizontal=True
 )
 
 # 案件選択
@@ -44,24 +42,95 @@ selected_project = st.selectbox(
     list(project_map.keys())
 )
 
+project_id = project_map[selected_project]
+
+# 選択した案件の商品だけ取得
+items = conn.execute(
+    """
+    SELECT *
+    FROM items
+    WHERE project_id = ?
+    ORDER BY code
+    """,
+    (project_id,)
+).fetchall()
+
+if not items:
+    st.warning("この案件には商品が登録されていません")
+    st.stop()
+
+# 商品候補
+item_options = [
+    f"{i['code']} - {i['name']}"
+    for i in items
+]
+
+item_map = {
+    f"{i['code']} - {i['name']}": i["id"]
+    for i in items
+}
+
+code_map = {
+    i["code"]: f"{i['code']} - {i['name']}"
+    for i in items
+}
+
+st.subheader("商品指定")
+
 # バーコード入力
 barcode = st.text_input(
-    "商品コード"
+    "バーコード / 商品コード",
+    placeholder="バーコードを読み取るか、商品コードを入力"
 )
 
-selected_item = None
+barcode_item = None
 
-for key in item_map.keys():
+if barcode:
+    clean_barcode = barcode.strip()
 
-    if key.startswith(barcode):
+    # SHARK形式 案件コード_商品コード にも対応
+    if "_" in clean_barcode:
+        clean_barcode = clean_barcode.split("_")[-1]
 
-        selected_item = key
+    if clean_barcode in code_map:
+        barcode_item = code_map[clean_barcode]
+        st.success(f"バーコード一致：{barcode_item}")
+    else:
+        st.warning("バーコードに一致する商品がありません")
 
-        st.success(
-            f"商品: {key}"
-        )
+# 商品選択
+default_index = 0
 
-        break
+if barcode_item in item_options:
+    default_index = item_options.index(barcode_item)
+
+selected_item = st.selectbox(
+    "商品選択",
+    item_options,
+    index=default_index
+)
+
+item_id = item_map[selected_item]
+
+# 現在庫表示
+current_stock = conn.execute(
+    """
+    SELECT
+        COALESCE(SUM(qty), 0)
+    FROM stock_logs
+    WHERE
+        project_id = ?
+        AND item_id = ?
+    """,
+    (
+        project_id,
+        item_id
+    )
+).fetchone()[0]
+
+st.info(
+    f"現在庫：{current_stock}"
+)
 
 # 数量
 qty = st.number_input(
@@ -73,74 +142,44 @@ qty = st.number_input(
 # 登録
 if st.button("登録"):
 
-    if not selected_item:
+    save_qty = qty
 
-        st.error(
-            "商品が見つかりません"
-        )
+    # 出庫時在庫チェック
+    if stock_type == "出庫":
 
-    else:
+        if qty > current_stock:
 
-        project_id = project_map[
-            selected_project
-        ]
-
-        item_id = item_map[
-            selected_item
-        ]
-
-        # 出庫時在庫チェック
-        if stock_type == "出庫":
-
-            stock = conn.execute(
-                """
-                SELECT
-                    COALESCE(
-                        SUM(qty),
-                        0
-                    )
-                FROM stock_logs
-                WHERE
-                    project_id = ?
-                    AND item_id = ?
-                """,
-                (
-                    project_id,
-                    item_id
-                )
-            ).fetchone()[0]
-
-            if qty > stock:
-
-                st.error(
-                    f"在庫不足: {stock}"
-                )
-
-                st.stop()
-
-            qty = -qty
-
-        # DB登録
-        conn.execute(
-            """
-            INSERT INTO stock_logs(
-                project_id,
-                item_id,
-                qty,
-                type
+            st.error(
+                f"在庫不足：現在庫は {current_stock} です"
             )
-            VALUES (?, ?, ?, ?)
-            """,
-            (
-                project_id,
-                item_id,
-                qty,
-                stock_type
-            )
-        )
 
-        conn.commit()
+            st.stop()
 
-        st.success(
-            f"{stock_type}登録完了"
+        save_qty = -qty
+
+    # DB登録
+    conn.execute(
+        """
+        INSERT INTO stock_logs(
+        project_id,
+        item_id,
+        qty,
+        type,
+        username
         )
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (
+        project_id,
+        item_id,
+        save_qty,
+        stock_type,
+        st.session_state.username
+        )   
+    )
+
+    conn.commit()
+
+    st.success(
+        f"{stock_type}登録完了：{selected_item}"
+    )

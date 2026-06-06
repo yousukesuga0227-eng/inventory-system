@@ -45,21 +45,26 @@ USERS = {
 
 "山縣": {
     "password": "1111",
-    "role": "user"
+    "role": "admin"
 },
 
 "小寺": {
     "password": "2222",
-    "role": "user"
+    "role": "admin"
 },
 
 "河野": {
     "password": "3333",
-    "role": "user"
+    "role": "admin"
 },
 
 "鮫島昇汰": {
     "password": "0416",
+    "role": "admin"
+},
+
+"竹中": {
+    "password": "0522",
     "role": "admin"
 },
 
@@ -251,6 +256,11 @@ with col2:
     )
 
     st.page_link(
+        "pages/09_operation_logs.py",
+        label="🧾 操作履歴"
+    )   
+
+    st.page_link(
         "pages/07_item_search.py",
         label="🔍 商品検索"
     )
@@ -261,5 +271,5 @@ with col2:
 )
 
 st.caption(
-    "大阪陸運 八尾倉庫 在庫管理システム Ver 1.001"
+    "大阪陸運 八尾倉庫 在庫管理システム Ver 1.03"
 )

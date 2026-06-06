@@ -1,38 +1,31 @@
-from database import get_connection
+import sqlite3
 
-conn = get_connection()
+conn = sqlite3.connect("data/inventory.db")
 
-columns = [
-    ("receive_date", "TEXT"),
-    ("shipping_date", "TEXT"),
-    ("status", "TEXT"),
-    ("memo", "TEXT"),
-    ("created_at", "TEXT")
+columns = conn.execute(
+    """
+    PRAGMA table_info(stock_logs)
+    """
+).fetchall()
+
+column_names = [
+    column[1]
+    for column in columns
 ]
 
-for column_name, column_type in columns:
+if "username" not in column_names:
+    conn.execute(
+        """
+        ALTER TABLE stock_logs
+        ADD COLUMN username TEXT
+        """
+    )
 
-    try:
+    conn.commit()
 
-        conn.execute(
-            f"""
-            ALTER TABLE projects
-            ADD COLUMN {column_name}
-            {column_type}
-            """
-        )
+    print("username カラムを追加しました")
 
-        print(
-            f"{column_name}追加完了"
-        )
+else:
+    print("username カラムはすでにあります")
 
-    except Exception as e:
-
-        print(
-            f"{column_name}は既に存在"
-        )
-
-conn.commit()
 conn.close()
-
-print("更新完了")
