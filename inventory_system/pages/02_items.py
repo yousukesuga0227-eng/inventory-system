@@ -176,7 +176,6 @@ SELECT
     items.code AS 商品コード,
     items.name AS 商品名,
     projects.name AS 案件名,
-    projects.code AS 案件コード
 FROM items
 LEFT JOIN projects
     ON items.project_id = projects.id
@@ -209,7 +208,7 @@ for row in label_rows:
             "商品名": row["商品名"],
             "案件名": row["案件名"],
             "案件コード": row["案件コード"],
-            "バーコード文字": f'{row["案件コード"]}_{row["商品コード"]}'
+            "バーコード文字": f'{row["商品コード"]}'
         }
     )
 
