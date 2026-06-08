@@ -144,7 +144,7 @@ st.markdown(
     div[data-testid="stPageLink"] a {
         border: 1px solid #dddddd;
         border-radius: 14px;
-        padding: 18px 20px;
+        padding: 14px 18px;
         margin: 8px 0;
         background-color: #ffffff;
         box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
@@ -152,7 +152,7 @@ st.markdown(
         font-weight: 700;
         font-size: 17px;
         transition: 0.2s ease;
-        min-height: 64px;
+        min-height: 56px;
         display: flex;
         align-items: center;
         justify-content: center;
@@ -165,11 +165,11 @@ st.markdown(
     }
 
     .menu-title {
-        font-size: 34px;
-        font-weight: 800;
-        margin-top: 30px;
-        margin-bottom: 20px;
-    }
+    font-size: 34px;
+    font-weight: 800;
+    margin-top: 20px;
+    margin-bottom: 14px;
+}
 
     .system-subtitle {
         text-align: center;
