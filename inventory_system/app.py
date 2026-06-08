@@ -4,82 +4,90 @@ import os
 import shutil
 from datetime import datetime
 
+# =====================
+# ページ設定
+# =====================
+
 st.set_page_config(
-    page_title="大阪陸運 八尾倉庫 在庫管理システム",
+    page_title="大阪陸運 | SHARK",
     layout="wide"
 )
+
+# =====================
+# パス設定
+# =====================
 
 BASE_DIR = os.path.dirname(__file__)
 
 logo_path = os.path.join(
     BASE_DIR,
-    "logo.png"
+    "20260608-logo.png"
 )
 
-conn = get_connection()
-
-# -------------------
-# ログイン
-# -------------------
+# =====================
+# ログインユーザー
+# 後で users.py / usersテーブルに移行予定
+# =====================
 
 USERS = {
-"admin": {
-"password": "1234",
-"role": "admin"
-},
-
-"user": {
-    "password": "0000",
-    "role": "user"
-},
-
-"壽賀": {
-    "password": "0227",
-    "role": "admin"
-},
-
-"若杉": {
-    "password": "8147",
-    "role": "admin"
-},
-
-"鮫島": {
-    "password": "0904",
-    "role": "admin"
-},
-
-"山縣": {
-    "password": "1111",
-    "role": "admin"
-},
-
-"小寺": {
-    "password": "2222",
-    "role": "admin"
-},
-
-"河野": {
-    "password": "3333",
-    "role": "admin"
-},
-
-"鮫島昇汰": {
-    "password": "0416",
-    "role": "admin"
-},
-
-"竹中": {
-    "password": "0522",
-    "role": "admin"
-},
-
+    "admin": {
+        "password": "1234",
+        "role": "admin"
+    },
+    "user": {
+        "password": "0000",
+        "role": "user"
+    },
+    "壽賀": {
+        "password": "0227",
+        "role": "admin"
+    },
+    "若杉": {
+        "password": "8147",
+        "role": "admin"
+    },
+    "鮫島": {
+        "password": "0904",
+        "role": "admin"
+    },
+    "山縣": {
+        "password": "1111",
+        "role": "admin"
+    },
+    "小寺": {
+        "password": "2222",
+        "role": "admin"
+    },
+    "河野": {
+        "password": "3333",
+        "role": "admin"
+    },
+    "鮫島昇汰": {
+        "password": "0416",
+        "role": "admin"
+    },
+    "竹中": {
+        "password": "0522",
+        "role": "admin"
+    },
 }
+
+# =====================
+# セッション初期化
+# =====================
 
 if "login" not in st.session_state:
     st.session_state.login = False
 
 if "role" not in st.session_state:
     st.session_state.role = None
+
+if "username" not in st.session_state:
+    st.session_state.username = None
+
+# =====================
+# ログイン画面
+# =====================
 
 if not st.session_state.login:
 
@@ -120,6 +128,16 @@ if not st.session_state.login:
 
     st.stop()
 
+# =====================
+# ログイン後ここから
+# =====================
+
+conn = get_connection()
+
+# =====================
+# CSS
+# =====================
+
 st.markdown(
     """
     <style>
@@ -152,39 +170,111 @@ st.markdown(
         margin-top: 30px;
         margin-bottom: 20px;
     }
+
+    .system-subtitle {
+        text-align: center;
+        color: #555555;
+        font-size: 20px;
+        font-weight: 600;
+        letter-spacing: 1px;
+        margin-top: 4px;
+        margin-bottom: 20px;
+    }
     </style>
+    """,
+    unsafe_allow_html=True
+)
+
+# =====================
+# TOPタイトル
+# =====================
+
+if os.path.exists(logo_path):
+
+    col1, col2, col3 = st.columns([1, 2, 1])
+
+    with col2:
+
+        st.image(
+            logo_path,
+            use_container_width=True
+        )
+
+else:
+
+    st.markdown(
+        """
+        <h1 style='text-align: center; font-size: 52px; margin-top: 20px;'>
+            大阪陸運
+        </h1>
+        """,
+        unsafe_allow_html=True
+    )
+
+    st.warning(
+        "ロゴ画像が見つかりません。inventory_system/20260608-logo.png を配置してください。"
+    )
+
+st.markdown(
+    """
+    <p class="system-subtitle">
+        Smart Handling Resource Keeper System
+    </p>
     """,
     unsafe_allow_html=True
 )
 
 st.write("---")
 
-if st.button("💾 DBバックアップ"):
+# =====================
+# DBバックアップ
+# クラウド版ではSQLiteバックアップ不可なのでローカル時だけ表示
+# =====================
 
-    db_path = os.path.join(
-        BASE_DIR,
-        "data",
-        "inventory.db"
-    )
+database_url = os.environ.get("DATABASE_URL")
 
-    backup_name = (
-        f"backup_"
-        f"{datetime.now().strftime('%Y%m%d_%H%M%S')}.db"
-    )
+try:
+    if "DATABASE_URL" in st.secrets:
+        database_url = st.secrets["DATABASE_URL"]
+except Exception:
+    pass
 
-    shutil.copy(
-        db_path,
-        backup_name
-    )
+if not database_url:
 
-    st.success(
-        f"バックアップ作成完了: {backup_name}"
+    if st.button("💾 DBバックアップ"):
+
+        db_path = os.path.join(
+            BASE_DIR,
+            "data",
+            "inventory.db"
+        )
+
+        backup_name = (
+            f"backup_"
+            f"{datetime.now().strftime('%Y%m%d_%H%M%S')}.db"
+        )
+
+        shutil.copy(
+            db_path,
+            backup_name
+        )
+
+        st.success(
+            f"バックアップ作成完了: {backup_name}"
+        )
+
+else:
+
+    st.info(
+        "クラウドDB接続中：データはSupabaseに保存されています。"
     )
 
 st.write("---")
 
-
+# =====================
 # 件数取得
+# =====================
+
 project_count = conn.execute(
     """
     SELECT COUNT(*)
@@ -206,7 +296,10 @@ log_count = conn.execute(
     """
 ).fetchone()[0]
 
-# 横並び
+# =====================
+# 件数表示
+# =====================
+
 col1, col2, col3 = st.columns(3)
 
 with col1:
@@ -231,6 +324,10 @@ with col3:
     )
 
 st.write("---")
+
+# =====================
+# システムメニュー
+# =====================
 
 st.markdown(
     '<div class="menu-title">📋 システムメニュー</div>',
@@ -332,6 +429,8 @@ for i in range(0, len(menu_items), 3):
                 item["page"],
                 label=item["label"]
             )
+
+st.write("---")
 
 st.caption(
     "大阪陸運 八尾倉庫 在庫管理システム Ver 1.03"
