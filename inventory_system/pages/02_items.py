@@ -175,7 +175,7 @@ label_query = """
 SELECT
     items.code AS 商品コード,
     items.name AS 商品名,
-    projects.name AS 案件名,
+    projects.name AS 案件名
 FROM items
 LEFT JOIN projects
     ON items.project_id = projects.id
@@ -207,8 +207,7 @@ for row in label_rows:
             "商品コード": row["商品コード"],
             "商品名": row["商品名"],
             "案件名": row["案件名"],
-            "案件コード": row["案件コード"],
-            "バーコード文字": f'{row["商品コード"]}'
+            "バーコード文字": str(row["商品コード"])
         }
     )
 
@@ -238,6 +237,7 @@ st.download_button(
 if df_labels.empty:
     st.info("出力できる商品がありません")
 
+    
 # 検索
 search_text = st.text_input(
     "商品検索"
