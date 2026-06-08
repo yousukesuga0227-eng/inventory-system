@@ -4,6 +4,11 @@ import os
 import shutil
 from datetime import datetime
 
+st.set_page_config(
+    page_title="大阪陸運 八尾倉庫 在庫管理システム",
+    layout="wide"
+)
+
 BASE_DIR = os.path.dirname(__file__)
 
 logo_path = os.path.join(
@@ -115,20 +120,39 @@ if not st.session_state.login:
 
     st.stop()
 
-st.set_page_config(
-    page_title="大阪陸運 八尾倉庫 在庫管理システム",
-    layout="wide"
-)
-
 st.markdown(
     """
-    <h1 style='text-align: center;'>
-        大阪陸運 八尾倉庫 在庫管理システム
-    </h1>
+    <style>
+    div[data-testid="stPageLink"] a {
+        border: 1px solid #dddddd;
+        border-radius: 14px;
+        padding: 18px 20px;
+        margin: 8px 0;
+        background-color: #ffffff;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+        text-align: center;
+        font-weight: 700;
+        font-size: 17px;
+        transition: 0.2s ease;
+        min-height: 64px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
 
-    <p style='text-align: center; color: gray;'>
-        Inventory Management System
-    </p>
+    div[data-testid="stPageLink"] a:hover {
+        background-color: #f5f7fa;
+        border-color: #999999;
+        transform: translateY(-2px);
+    }
+
+    .menu-title {
+        font-size: 34px;
+        font-weight: 800;
+        margin-top: 30px;
+        margin-bottom: 20px;
+    }
+    </style>
     """,
     unsafe_allow_html=True
 )
@@ -208,67 +232,106 @@ with col3:
 
 st.write("---")
 
-st.markdown("## 📋 システムメニュー")
+st.markdown(
+    '<div class="menu-title">📋 システムメニュー</div>',
+    unsafe_allow_html=True
+)
 
-col1, col2 = st.columns([8, 1])
+# ログアウトボタン
+logout_col1, logout_col2 = st.columns([8, 1])
 
-with col2:
+with logout_col2:
 
     if st.button("🚪ログアウト"):
 
         st.session_state.login = False
-
         st.session_state.role = None
+        st.session_state.username = None
 
         st.rerun()
 
-col1, col2 = st.columns(2)
+# =====================
+# メニュー定義
+# =====================
 
-with col1:
+menu_items = []
 
-    if st.session_state.role == "admin":
+# 管理者だけ表示
+if st.session_state.role == "admin":
 
-        st.page_link(
-            "pages/01_projects.py",
-            label="📁 案件管理"
-        )
-
-        st.page_link(
-            "pages/02_items.py",
-            label="📦 商品管理"
-        )
-
-    st.page_link(
-        "pages/03_stock.py",
-        label="📥📤 入出庫登録"
+    menu_items.extend(
+        [
+            {
+                "page": "pages/01_projects.py",
+                "label": "📁 案件管理"
+            },
+            {
+                "page": "pages/02_items.py",
+                "label": "📦 商品管理"
+            },
+        ]
     )
 
-with col2:
-
-    st.page_link(
-        "pages/04_stock_list.py",
-        label="📊 在庫一覧"
-    )
-
-    st.page_link(
-        "pages/05_history.py",
-        label="📝 入出庫履歴"
-    )
-
-    st.page_link(
-        "pages/09_operation_logs.py",
-        label="🧾 操作履歴"
-    )   
-
-    st.page_link(
-        "pages/07_item_search.py",
-        label="🔍 商品検索"
-    )
-
-    st.page_link(
-    "pages/08_shipping_instruction.py",
-    label="📄 出荷指示書"
+# 一般ユーザーも表示
+menu_items.extend(
+    [
+        {
+            "page": "pages/03_stock.py",
+            "label": "📥📤 入出庫登録"
+        },
+        {
+            "page": "pages/04_stock_list.py",
+            "label": "📊 在庫一覧"
+        },
+        {
+            "page": "pages/05_history.py",
+            "label": "📝 入出庫履歴"
+        },
+        {
+            "page": "pages/06_inventory_check.py",
+            "label": "🧮 棚卸"
+        },
+        {
+            "page": "pages/07_item_search.py",
+            "label": "🔍 商品検索"
+        },
+        {
+            "page": "pages/08_shipping_instruction.py",
+            "label": "📄 出荷指示書"
+        },
+    ]
 )
+
+# 管理者だけ表示
+if st.session_state.role == "admin":
+
+    menu_items.append(
+        {
+            "page": "pages/09_operation_logs.py",
+            "label": "🧾 操作履歴"
+        }
+    )
+
+# =====================
+# 3列で均等表示
+# =====================
+
+for i in range(0, len(menu_items), 3):
+
+    cols = st.columns(3)
+
+    row_items = menu_items[
+        i:i + 3
+    ]
+
+    for col, item in zip(cols, row_items):
+
+        with col:
+
+            st.page_link(
+                item["page"],
+                label=item["label"]
+            )
 
 st.caption(
     "大阪陸運 八尾倉庫 在庫管理システム Ver 1.03"
