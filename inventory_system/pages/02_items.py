@@ -5,6 +5,7 @@ from barcode.writer import ImageWriter
 from database import get_connection, log_action
 from auth import check_admin
 import pandas as pd
+from io import BytesIO
 
 check_admin()
 
@@ -141,6 +142,192 @@ if st.button("商品登録"):
         st.success(
             "商品 + 案件バーコード生成完了"
         )
+
+# =====================
+# CSV一括登録
+# =====================
+
+st.subheader("CSVで商品一括登録")
+
+st.info(
+    "CSVの列名は「商品コード」「商品名」にしてください。選択中の案件にまとめて登録されます。"
+)
+
+# サンプルCSVダウンロード
+sample_df = pd.DataFrame(
+    [
+        {
+            "商品コード": "05-005",
+            "商品名": "Falcon ダイニングチェア"
+        },
+        {
+            "商品コード": "05-006",
+            "商品名": "Tsubomi テーブル"
+        }
+    ]
+)
+
+sample_csv = sample_df.to_csv(
+    index=False
+).encode("cp932", errors="ignore")
+
+st.download_button(
+    label="サンプルCSVをダウンロード",
+    data=sample_csv,
+    file_name="items_sample.csv",
+    mime="text/csv"
+)
+
+uploaded_file = st.file_uploader(
+    "商品CSVをアップロード",
+    type=["csv"]
+)
+
+if uploaded_file is not None:
+
+    csv_bytes = uploaded_file.getvalue()
+
+    try:
+        df_upload = pd.read_csv(
+            BytesIO(csv_bytes),
+            encoding="cp932"
+        )
+
+    except UnicodeDecodeError:
+        df_upload = pd.read_csv(
+            BytesIO(csv_bytes),
+            encoding="utf-8-sig"
+        )
+
+    # 列名の空白除去
+    df_upload.columns = [
+        str(col).strip()
+        for col in df_upload.columns
+    ]
+
+    required_columns = [
+        "商品コード",
+        "商品名"
+    ]
+
+    missing_columns = [
+        col
+        for col in required_columns
+        if col not in df_upload.columns
+    ]
+
+    if missing_columns:
+
+        st.error(
+            f"CSVに必要な列がありません: {', '.join(missing_columns)}"
+        )
+
+    else:
+
+        df_upload = df_upload[
+            required_columns
+        ].fillna("")
+
+        df_upload["商品コード"] = (
+            df_upload["商品コード"]
+            .astype(str)
+            .str.strip()
+        )
+
+        df_upload["商品名"] = (
+            df_upload["商品名"]
+            .astype(str)
+            .str.strip()
+        )
+
+        # 空行除外
+        df_upload = df_upload[
+            (df_upload["商品コード"] != "")
+            & (df_upload["商品名"] != "")
+        ]
+
+        st.write(
+            f"読み込み件数：{len(df_upload)}件"
+        )
+
+        st.dataframe(
+            df_upload,
+            use_container_width=True,
+            hide_index=True
+        )
+
+        if st.button("CSVの商品を一括登録"):
+
+            created_count = 0
+            skipped_items = []
+
+            for _, row in df_upload.iterrows():
+
+                item_code = row["商品コード"]
+                item_name = row["商品名"]
+
+                # 同じ案件内で商品コード重複チェック
+                exists = conn.execute(
+                    """
+                    SELECT id
+                    FROM items
+                    WHERE project_id = ?
+                      AND code = ?
+                    """,
+                    (
+                        project_id,
+                        item_code
+                    )
+                ).fetchone()
+
+                if exists:
+
+                    skipped_items.append(
+                        f"{item_code} / {item_name}"
+                    )
+
+                    continue
+
+                conn.execute(
+                    """
+                    INSERT INTO items(
+                        code,
+                        name,
+                        project_id
+                    )
+                    VALUES (?, ?, ?)
+                    """,
+                    (
+                        item_code,
+                        item_name,
+                        project_id
+                    )
+                )
+
+                created_count += 1
+
+            conn.commit()
+
+            log_action(
+                st.session_state.username,
+                "商品CSV一括登録",
+                "items",
+                None,
+                selected_project,
+                f"登録: {created_count}件 / スキップ: {len(skipped_items)}件"
+            )
+
+            st.success(
+                f"CSV一括登録完了：{created_count}件"
+            )
+
+            if skipped_items:
+
+                st.warning(
+                    f"重複のためスキップ：{len(skipped_items)}件"
+                )
+
+                st.write(skipped_items)
 
 sort_option = st.selectbox(
     "並び順",
