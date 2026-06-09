@@ -11,19 +11,7 @@ check_admin()
 
 
 conn = get_connection()
-try:
-    conn.execute(
-        """
-        ALTER TABLE items
-        ADD COLUMN required_quantity INTEGER DEFAULT 1
-        """
-    )
-    conn.commit()
-    st.success("required_quantity追加成功！")
 
-except Exception as e:
-    st.error(e)
-    
 st.title("商品管理")
 st.success(
     f"ログイン中：{st.session_state.username}"
