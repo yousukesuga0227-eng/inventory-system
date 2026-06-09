@@ -146,20 +146,20 @@ if not st.session_state.shark_boot_done:
                 use_container_width=True
             )
 
-st.markdown(
-    """
-    <div style="text-align:center;">
-        <h2 style="color:#00cc66;">
-        ACCESS GRANTED
-        </h2>
-    </div>
-    """,
-    unsafe_allow_html=True
-)
-time.sleep(0.8)
+        st.markdown(
+            """
+            <div style="text-align:center;">
+                <h2 style="color:#00cc66;">
+                ACCESS GRANTED
+                </h2>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
 
-st.session_state.shark_boot_done = True
-st.rerun()
+        time.sleep(0.8)
+    st.session_state.shark_boot_done = True
+    st.rerun()
 
 # =====================
 # ログイン画面
