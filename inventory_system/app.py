@@ -127,7 +127,7 @@ if not st.session_state.shark_boot_done:
     for i, msg in enumerate(boot_messages):
         status.markdown(f"### {msg}")
         progress.progress(int((i + 1) / len(boot_messages) * 100))
-        time.sleep(0.35)
+        time.sleep(0.4)
 
     st.markdown(
         """
@@ -146,20 +146,20 @@ if not st.session_state.shark_boot_done:
                 use_container_width=True
             )
 
-    st.markdown(
-        """
-        <div style="text-align:center; font-size:12px; opacity:0.65;">
-            Version 1.03 / Build 2026.06<br>
-            Internal System - Authorized Personnel Only
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
+st.markdown(
+    """
+    <div style="text-align:center;">
+        <h2 style="color:#00cc66;">
+        ACCESS GRANTED
+        </h2>
+    </div>
+    """,
+    unsafe_allow_html=True
+)
+time.sleep(0.8)
 
-    time.sleep(1.5)
-
-    st.session_state.shark_boot_done = True
-    st.rerun()
+st.session_state.shark_boot_done = True
+st.rerun()
 
 # =====================
 # ログイン画面
