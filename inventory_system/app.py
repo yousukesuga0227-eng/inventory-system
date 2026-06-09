@@ -127,7 +127,26 @@ if not st.session_state.shark_boot_done:
     for i, msg in enumerate(boot_messages):
         status.markdown(f"### {msg}")
         progress.progress(int((i + 1) / len(boot_messages) * 100))
-        time.sleep(0.8)
+        time.sleep(0.4)
+
+    # 100%になった後に少し見せる
+    time.sleep(0.4)
+
+    # 進捗表示を消す
+    progress.empty()
+    status.empty()
+
+    # ロゴ表示
+    if os.path.exists(boot_logo_path):
+        col1, col2, col3 = st.columns([1, 2, 1])
+        with col2:
+            st.image(
+                boot_logo_path,
+                use_container_width=True
+            )
+
+    # ロゴを長めに見せる
+    time.sleep(2.5)
 
     st.markdown(
         """
@@ -138,26 +157,8 @@ if not st.session_state.shark_boot_done:
         unsafe_allow_html=True
     )
 
-    if os.path.exists(boot_logo_path):
-        col1, col2, col3 = st.columns([1, 2, 1])
-        with col2:
-            st.image(
-                boot_logo_path,
-                use_container_width=True
-            )
+    time.sleep(0.8)
 
-        st.markdown(
-            """
-            <div style="text-align:center;">
-                <h2 style="color:#00cc66;">
-                ACCESS GRANTED
-                </h2>
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
-
-        time.sleep(0.8)
     st.session_state.shark_boot_done = True
     st.rerun()
 
