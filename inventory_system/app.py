@@ -218,7 +218,7 @@ else:
 st.markdown(
     """
     <p class="system-subtitle">
-        Smart Handling Resource Keeper System
+        Smart Handling All Resource Keeper System
     </p>
     """,
     unsafe_allow_html=True
