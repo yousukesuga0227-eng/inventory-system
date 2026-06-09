@@ -11,6 +11,16 @@ check_admin()
 
 
 conn = get_connection()
+try:
+    conn.execute(
+        """
+        ALTER TABLE items
+        ADD COLUMN required_quantity INTEGER DEFAULT 1
+        """
+    )
+    conn.commit()
+except Exception:
+    pass
 
 st.title("商品管理")
 st.success(
