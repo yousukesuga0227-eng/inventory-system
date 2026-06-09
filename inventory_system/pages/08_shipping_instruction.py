@@ -22,28 +22,16 @@ from reportlab.graphics.barcode import code128
 
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
-
 from reportlab.lib.styles import getSampleStyleSheet
 
 
 check_login()
-
 conn = get_connection()
 
 st.title("📄 出荷指示書")
-st.success(
-    f"ログイン中：{st.session_state.username}"
-)
+st.success(f"ログイン中：{st.session_state.username}")
 
-# =====================
-# パス設定
-# =====================
-
-BASE_DIR = os.path.dirname(
-    os.path.dirname(
-        __file__
-    )
-)
+BASE_DIR = os.path.dirname(os.path.dirname(__file__))
 
 font_path = os.path.join(
     BASE_DIR,
@@ -56,17 +44,9 @@ logo_path = os.path.join(
     "20260608-logo.png"
 )
 
-# フォント登録
 pdfmetrics.registerFont(
-    TTFont(
-        "NotoSansJP",
-        font_path
-    )
+    TTFont("NotoSansJP", font_path)
 )
-
-# =====================
-# セッション初期化
-# =====================
 
 if "shipping_scanned_codes" not in st.session_state:
     st.session_state.shipping_scanned_codes = []
@@ -78,48 +58,31 @@ if "shipping_selected_project_id" not in st.session_state:
     st.session_state.shipping_selected_project_id = None
 
 
-# =====================
-# バーコード追加処理
-# =====================
-
 def add_barcode():
-
     barcode_text = st.session_state.shipping_barcode_input.strip()
 
     if not barcode_text:
         return
 
-    # 念のため、古い形式「案件コード_商品コード」にも対応
-    # 商品コードにハイフンが入る可能性があるので、ハイフンでは分割しない
     if "_" in barcode_text:
         barcode_text = barcode_text.split("_")[-1]
 
-    st.session_state.shipping_scanned_codes.append(
-        barcode_text
-    )
-
-    # 入力欄を空にする
+    st.session_state.shipping_scanned_codes.append(barcode_text)
     st.session_state.shipping_barcode_input = ""
 
-
-# =====================
-# 案件取得
-# =====================
 
 projects = conn.execute(
     """
     SELECT *
     FROM projects
+    WHERE
+        COALESCE(is_hidden, FALSE) = FALSE
     ORDER BY name
     """
 ).fetchall()
 
 if not projects:
-
-    st.warning(
-        "案件が登録されていません"
-    )
-
+    st.warning("案件が登録されていません")
     st.stop()
 
 project_options = {
@@ -132,13 +95,9 @@ selected_project = st.selectbox(
     list(project_options.keys())
 )
 
-project_id = project_options[
-    selected_project
-]
+project_id = project_options[selected_project]
 
-# 案件変更時は読み取りリストをクリア
 if st.session_state.shipping_selected_project_id != project_id:
-
     st.session_state.shipping_selected_project_id = project_id
     st.session_state.shipping_scanned_codes = []
     st.session_state.shipping_barcode_input = ""
@@ -147,22 +106,20 @@ project = conn.execute(
     """
     SELECT *
     FROM projects
-    WHERE id = ?
+    WHERE
+        id = ?
+        AND COALESCE(is_hidden, FALSE) = FALSE
     """,
     (project_id,)
 ).fetchone()
 
+if not project:
+    st.warning("この案件は非表示、または存在しません")
+    st.stop()
+
 project_code = project["code"]
 project_name = project["name"]
-shipping_date = (
-    project["shipping_date"]
-    if "shipping_date" in project.keys()
-    else ""
-)
-
-# =====================
-# 選択案件の商品取得
-# =====================
+shipping_date = project["shipping_date"] if "shipping_date" in project.keys() else ""
 
 items = conn.execute(
     """
@@ -170,18 +127,16 @@ items = conn.execute(
         code,
         name
     FROM items
-    WHERE project_id = ?
+    WHERE
+        project_id = ?
+        AND COALESCE(is_active, TRUE) = TRUE
     ORDER BY code
     """,
     (project_id,)
 ).fetchall()
 
 if not items:
-
-    st.warning(
-        "この案件には商品が登録されていません"
-    )
-
+    st.warning("この案件には有効な商品が登録されていません")
     st.stop()
 
 item_map = {
@@ -189,18 +144,8 @@ item_map = {
     for item in items
 }
 
-selected_count = len(items)
-
-st.write(
-    "選択案件の商品数 =",
-    selected_count
-)
-
+st.write("選択案件の商品数 =", len(items))
 st.write("---")
-
-# =====================
-# バーコード読み取り
-# =====================
 
 st.subheader("バーコード検品")
 
@@ -215,48 +160,26 @@ st.text_input(
     on_change=add_barcode
 )
 
-col_clear1, col_clear2 = st.columns([1, 5])
-
-with col_clear1:
-
-    if st.button("読み取りリセット"):
-
-        st.session_state.shipping_scanned_codes = []
-        st.session_state.shipping_barcode_input = ""
-
-        st.rerun()
+if st.button("読み取りリセット"):
+    st.session_state.shipping_scanned_codes = []
+    st.session_state.shipping_barcode_input = ""
+    st.rerun()
 
 scanned_codes = st.session_state.shipping_scanned_codes
 
-# =====================
-# 読み取り結果判定
-# =====================
-
 st.subheader("読み取り結果")
 
+valid_results = []
+invalid_results = []
+duplicate_codes = []
+
 if not scanned_codes:
-
-    st.info(
-        "まだバーコードが読み取られていません"
-    )
-
-    valid_results = []
-    invalid_results = []
-    duplicate_codes = []
+    st.info("まだバーコードが読み取られていません")
 
 else:
-
-    valid_results = []
-    invalid_results = []
-    duplicate_codes = []
-
     seen_codes = set()
 
-    for index, scanned_code in enumerate(
-        scanned_codes,
-        start=1
-    ):
-
+    for index, scanned_code in enumerate(scanned_codes, start=1):
         is_duplicate = scanned_code in seen_codes
 
         if is_duplicate:
@@ -265,7 +188,6 @@ else:
         seen_codes.add(scanned_code)
 
         if scanned_code in item_map:
-
             valid_results.append(
                 {
                     "No.": index,
@@ -277,7 +199,6 @@ else:
             )
 
         else:
-
             invalid_results.append(
                 {
                     "No.": index,
@@ -288,36 +209,19 @@ else:
                 }
             )
 
-    ok_count = len(valid_results)
-    ng_count = len(invalid_results)
-    duplicate_count = len(duplicate_codes)
-
     col1, col2, col3 = st.columns(3)
 
     with col1:
-        st.metric(
-            "読み取り数",
-            len(scanned_codes)
-        )
+        st.metric("読み取り数", len(scanned_codes))
 
     with col2:
-        st.metric(
-            "OK",
-            ok_count
-        )
+        st.metric("OK", len(valid_results))
 
     with col3:
-        st.metric(
-            "NG",
-            ng_count
-        )
+        st.metric("NG", len(invalid_results))
 
     if valid_results:
-
-        st.success(
-            "OKの商品"
-        )
-
+        st.success("OKの商品")
         st.dataframe(
             valid_results,
             use_container_width=True,
@@ -325,26 +229,17 @@ else:
         )
 
     if invalid_results:
-
-        st.error(
-            "NGの商品があります。案件違い、または未登録の商品コードです。"
-        )
-
+        st.error("NGの商品があります。案件違い、または未登録の商品コードです。")
         st.dataframe(
             invalid_results,
             use_container_width=True,
             hide_index=True
         )
 
-    if duplicate_count > 0:
-
+    if duplicate_codes:
         st.warning(
-            f"重複読み取りがあります：{duplicate_count}件"
+            f"重複読み取りがあります：{len(duplicate_codes)}件"
         )
-
-# =====================
-# PDF作成可否
-# =====================
 
 can_create_pdf = (
     len(scanned_codes) > 0
@@ -352,33 +247,19 @@ can_create_pdf = (
 )
 
 if not can_create_pdf:
-
-    st.warning(
-        "出荷指示書は、読み取り結果がすべてOKになった時だけ作成できます。"
-    )
-
+    st.warning("出荷指示書は、読み取り結果がすべてOKになった時だけ作成できます。")
 else:
-
-    st.success(
-        "すべてOKです。出荷指示書を作成できます。"
-    )
+    st.success("すべてOKです。出荷指示書を作成できます。")
 
 st.write("---")
-
-# =====================
-# PDF作成
-# =====================
 
 if st.button(
     "📄 出荷指示書作成",
     disabled=not can_create_pdf
 ):
-
-    # 重複分はPDFでは1商品として扱う
     pdf_codes = []
 
     for code in scanned_codes:
-
         if code not in pdf_codes:
             pdf_codes.append(code)
 
@@ -414,12 +295,7 @@ if st.button(
 
     elements = []
 
-    # =====================
-    # ロゴ
-    # =====================
-
     if os.path.exists(logo_path):
-
         elements.append(
             Image(
                 logo_path,
@@ -427,14 +303,7 @@ if st.button(
                 height=18 * mm
             )
         )
-
-        elements.append(
-            Spacer(1, 8)
-        )
-
-    # =====================
-    # タイトル
-    # =====================
+        elements.append(Spacer(1, 8))
 
     elements.append(
         Paragraph(
@@ -443,13 +312,7 @@ if st.button(
         )
     )
 
-    elements.append(
-        Spacer(1, 10)
-    )
-
-    # =====================
-    # 案件情報テーブル
-    # =====================
+    elements.append(Spacer(1, 10))
 
     info_data = [
         [
@@ -504,14 +367,7 @@ if st.button(
     )
 
     elements.append(info_table)
-
-    elements.append(
-        Spacer(1, 15)
-    )
-
-    # =====================
-    # 商品一覧テーブル
-    # =====================
+    elements.append(Spacer(1, 15))
 
     table_data = [
         [
@@ -525,18 +381,12 @@ if st.button(
         ]
     ]
 
-    for index, item in enumerate(
-        pdf_items,
-        start=1
-    ):
-
+    for index, item in enumerate(pdf_items, start=1):
         item_code = item["code"]
         item_name = item["name"]
 
-        barcode_value = str(item_code)
-
-        barcode = code128.Code128(
-            barcode_value,
+        barcode_obj = code128.Code128(
+            str(item_code),
             barHeight=18 * mm,
             barWidth=0.45,
             humanReadable=True
@@ -547,7 +397,7 @@ if st.button(
                 str(index),
                 item_code,
                 Paragraph(item_name, normal_style),
-                barcode,
+                barcode_obj,
                 "□",
                 "□",
                 "□"
@@ -587,14 +437,7 @@ if st.button(
     )
 
     elements.append(item_table)
-
-    elements.append(
-        Spacer(1, 18)
-    )
-
-    # =====================
-    # 備考・確認欄
-    # =====================
+    elements.append(Spacer(1, 18))
 
     memo_table = Table(
         [
