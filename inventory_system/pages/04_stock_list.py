@@ -19,6 +19,8 @@ projects = conn.execute(
     """
     SELECT DISTINCT name
     FROM projects
+    WHERE
+        COALESCE(is_hidden, FALSE) = FALSE
     ORDER BY name
     """
 ).fetchall()
@@ -70,7 +72,9 @@ LEFT JOIN stock_logs s
     ON s.item_id = i.id
     AND s.project_id = p.id
 
-WHERE 1=1
+WHERE
+    COALESCE(p.is_hidden, FALSE) = FALSE
+    AND COALESCE(i.is_active, TRUE) = TRUE
 """
 
 params = []
