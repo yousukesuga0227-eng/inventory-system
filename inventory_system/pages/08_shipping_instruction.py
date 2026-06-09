@@ -28,7 +28,7 @@ from reportlab.lib.styles import getSampleStyleSheet
 check_login()
 conn = get_connection()
 
-st.title("📄 出荷指示書")
+st.title("📄 出荷準備")
 st.success(f"ログイン中：{st.session_state.username}")
 
 BASE_DIR = os.path.dirname(os.path.dirname(__file__))
@@ -147,6 +147,156 @@ item_map = {
 st.write("選択案件の商品数 =", len(items))
 st.write("---")
 
+# =====================
+# ピッキングリストPDF作成
+# =====================
+
+if st.button("📋 ピッキングリスト作成"):
+
+    buffer = BytesIO()
+
+    doc = SimpleDocTemplate(
+        buffer,
+        pagesize=landscape(A4),
+        rightMargin=10 * mm,
+        leftMargin=10 * mm,
+        topMargin=10 * mm,
+        bottomMargin=10 * mm
+    )
+
+    styles = getSampleStyleSheet()
+
+    title_style = styles["Title"]
+    title_style.fontName = "NotoSansJP"
+
+    normal_style = styles["BodyText"]
+    normal_style.fontName = "NotoSansJP"
+    normal_style.fontSize = 8
+    normal_style.leading = 10
+
+    elements = []
+
+    if os.path.exists(logo_path):
+        elements.append(
+            Image(
+                logo_path,
+                width=75 * mm,
+                height=18 * mm
+            )
+        )
+        elements.append(Spacer(1, 8))
+
+    elements.append(
+        Paragraph(
+            "ピッキングリスト",
+            title_style
+        )
+    )
+
+    elements.append(Spacer(1, 10))
+
+    info_data = [
+        ["案件名", project_name, "案件コード", project_code],
+        ["出荷予定日", str(shipping_date), "発行日", datetime.now().strftime("%Y/%m/%d")],
+        ["発行者", st.session_state.username, "用途", "出荷前ピッキング"],
+    ]
+
+    info_table = Table(
+        info_data,
+        colWidths=[25 * mm, 90 * mm, 25 * mm, 60 * mm]
+    )
+
+    info_table.setStyle(
+        TableStyle(
+            [
+                ("FONTNAME", (0, 0), (-1, -1), "NotoSansJP"),
+                ("FONTSIZE", (0, 0), (-1, -1), 9),
+                ("GRID", (0, 0), (-1, -1), 0.5, colors.black),
+                ("BACKGROUND", (0, 0), (0, -1), colors.lightgrey),
+                ("BACKGROUND", (2, 0), (2, -1), colors.lightgrey),
+                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ]
+        )
+    )
+
+    elements.append(info_table)
+    elements.append(Spacer(1, 15))
+
+    table_data = [
+        [
+            "No.",
+            "商品コード",
+            "商品名",
+            "バーコード",
+            "ピッキング",
+            "備考"
+        ]
+    ]
+
+    for index, item in enumerate(items, start=1):
+        item_code = item["code"]
+        item_name = item["name"]
+
+        barcode_obj = code128.Code128(
+            str(item_code),
+            barHeight=18 * mm,
+            barWidth=0.45,
+            humanReadable=True
+        )
+
+        table_data.append(
+            [
+                str(index),
+                item_code,
+                Paragraph(item_name, normal_style),
+                barcode_obj,
+                "□",
+                ""
+            ]
+        )
+
+    item_table = Table(
+        table_data,
+        colWidths=[
+            10 * mm,
+            35 * mm,
+            75 * mm,
+            65 * mm,
+            25 * mm,
+            35 * mm
+        ],
+        repeatRows=1
+    )
+
+    item_table.setStyle(
+        TableStyle(
+            [
+                ("FONTNAME", (0, 0), (-1, -1), "NotoSansJP"),
+                ("FONTSIZE", (0, 0), (-1, -1), 8),
+                ("GRID", (0, 0), (-1, -1), 0.5, colors.black),
+                ("BACKGROUND", (0, 0), (-1, 0), colors.lightgrey),
+                ("ALIGN", (0, 0), (1, -1), "CENTER"),
+                ("ALIGN", (4, 1), (4, -1), "CENTER"),
+                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ]
+        )
+    )
+
+    elements.append(item_table)
+
+    doc.build(elements)
+
+    pdf_data = buffer.getvalue()
+
+    st.download_button(
+        label="⬇ ピッキングリストPDFダウンロード",
+        data=pdf_data,
+        file_name=f"ピッキングリスト_{project_code}.pdf",
+        mime="application/pdf"
+    )
+
+st.write("---")
+
 st.subheader("バーコード検品")
 
 st.info(
@@ -241,10 +391,33 @@ else:
             f"重複読み取りがあります：{len(duplicate_codes)}件"
         )
 
+required_codes = set(item_map.keys())
+checked_codes = set([
+    code for code in scanned_codes
+    if code in item_map
+])
+
+missing_codes = required_codes - checked_codes
+
 can_create_pdf = (
     len(scanned_codes) > 0
     and len(invalid_results) == 0
+    and len(missing_codes) == 0
 )
+
+if missing_codes:
+    st.warning("未検品の商品があります。")
+    st.dataframe(
+        [
+            {
+                "商品コード": code,
+                "商品名": item_map[code]
+            }
+            for code in sorted(missing_codes)
+        ],
+        use_container_width=True,
+        hide_index=True
+    )
 
 if not can_create_pdf:
     st.warning("出荷指示書は、読み取り結果がすべてOKになった時だけ作成できます。")
