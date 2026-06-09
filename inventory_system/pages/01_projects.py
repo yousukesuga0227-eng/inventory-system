@@ -211,11 +211,13 @@ search_text = st.text_input(
 query = """
 SELECT *
 FROM projects
-WHERE 1=1
+WHERE
+    COALESCE(is_hidden, FALSE) = FALSE
 """
 
 params = []
 
+# 検索条件
 if search_text:
 
     query += """
