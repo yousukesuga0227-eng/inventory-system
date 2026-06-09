@@ -402,13 +402,20 @@ menu_items.extend(
 # 管理者だけ表示
 if st.session_state.role == "admin":
 
-    menu_items.append(
-        {
-            "page": "pages/09_operation_logs.py",
-            "label": "🧾 操作履歴"
-        }
+    menu_items.extend(
+        [
+            {
+                "page": "pages/09_operation_logs.py",
+                "label": "🧾 操作履歴"
+            },
+            {
+                "page": "pages/10_admin.py",
+                "label": "⚙️ 管理ページ"
+            },
+        ]
     )
 
+    
 # =====================
 # 3列で均等表示
 # =====================
