@@ -2,6 +2,7 @@ import streamlit as st
 from database import get_connection
 import os
 import shutil
+import time
 from datetime import datetime
 
 # =====================
@@ -22,6 +23,12 @@ BASE_DIR = os.path.dirname(__file__)
 logo_path = os.path.join(
     BASE_DIR,
     "20260608-logo.png"
+)
+
+boot_logo_path = os.path.join(
+    BASE_DIR,
+    "assets",
+    "shark_01.jpg"
 )
 
 # =====================
@@ -84,6 +91,75 @@ if "role" not in st.session_state:
 
 if "username" not in st.session_state:
     st.session_state.username = None
+
+# =====================
+# SHARK 起動演出
+# =====================
+
+if "shark_boot_done" not in st.session_state:
+    st.session_state.shark_boot_done = False
+
+if not st.session_state.shark_boot_done:
+
+    st.markdown(
+        """
+        <div style="text-align:center; padding-top:40px;">
+            <h1 style="font-size:48px;">SHARK SYSTEM</h1>
+            <p style="font-size:20px; letter-spacing:2px;">
+                Smart Handling All Resource Keeper
+            </p>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
+    progress = st.progress(0)
+    status = st.empty()
+
+    boot_messages = [
+        "Initializing...",
+        "Loading Inventory...",
+        "Connecting Database...",
+        "Checking Permissions...",
+        "Authorizing User..."
+    ]
+
+    for i, msg in enumerate(boot_messages):
+        status.markdown(f"### {msg}")
+        progress.progress(int((i + 1) / len(boot_messages) * 100))
+        time.sleep(0.35)
+
+    st.markdown(
+        """
+        <div style="text-align:center;">
+            <h2 style="color:#00cc66;">ACCESS GRANTED</h2>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
+    if os.path.exists(boot_logo_path):
+        col1, col2, col3 = st.columns([1, 2, 1])
+        with col2:
+            st.image(
+                boot_logo_path,
+                use_container_width=True
+            )
+
+    st.markdown(
+        """
+        <div style="text-align:center; font-size:12px; opacity:0.65;">
+            Version 1.03 / Build 2026.06<br>
+            Internal System - Authorized Personnel Only
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
+    time.sleep(1.5)
+
+    st.session_state.shark_boot_done = True
+    st.rerun()
 
 # =====================
 # ログイン画面

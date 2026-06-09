@@ -4,3 +4,4 @@ python-barcode
 pillow
 reportlab
 psycopg[binary]
+openpyxl
