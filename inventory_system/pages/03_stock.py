@@ -15,6 +15,8 @@ projects = conn.execute(
     """
     SELECT *
     FROM projects
+    WHERE
+        COALESCE(is_hidden, FALSE) = FALSE
     ORDER BY name
     """
 ).fetchall()
@@ -49,7 +51,9 @@ items = conn.execute(
     """
     SELECT *
     FROM items
-    WHERE project_id = ?
+    WHERE
+        project_id = ?
+        AND COALESCE(is_active, TRUE) = TRUE
     ORDER BY code
     """,
     (project_id,)
