@@ -39,6 +39,13 @@ name = st.text_input(
     key="new_item_name"
 )
 
+required_quantity = st.number_input(
+    "必要個数",
+    min_value=1,
+    value=1,
+    step=1
+)
+
 # 案件選択
 project_options = {
     project["name"]: project["id"]
@@ -77,10 +84,11 @@ if st.button("商品登録"):
         cursor = conn.execute(
             """
             INSERT INTO items(
-                code,
-                name,
-                project_id
-            )
+            code,
+            name,
+            project_id,
+            required_quantity
+        )
             VALUES (?, ?, ?)
             """,
             (
