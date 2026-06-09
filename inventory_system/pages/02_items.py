@@ -22,6 +22,8 @@ projects = conn.execute(
     """
     SELECT *
     FROM projects
+    WHERE
+        COALESCE(is_hidden, FALSE) = FALSE
     ORDER BY name
     """
 ).fetchall()
@@ -366,7 +368,9 @@ SELECT
 FROM items
 LEFT JOIN projects
     ON items.project_id = projects.id
-WHERE 1=1
+WHERE
+    COALESCE(items.is_active, TRUE) = TRUE
+    AND COALESCE(projects.is_hidden, FALSE) = FALSE
 """
 
 label_params = []
@@ -439,7 +443,9 @@ SELECT
 FROM items
 LEFT JOIN projects
     ON items.project_id = projects.id
-WHERE 1=1
+WHERE
+    COALESCE(items.is_active, TRUE) = TRUE
+    AND COALESCE(projects.is_hidden, FALSE) = FALSE
 """
 
 params = []
