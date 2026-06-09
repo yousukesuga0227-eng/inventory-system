@@ -127,7 +127,7 @@ if not st.session_state.shark_boot_done:
     for i, msg in enumerate(boot_messages):
         status.markdown(f"### {msg}")
         progress.progress(int((i + 1) / len(boot_messages) * 100))
-        time.sleep(0.4)
+        time.sleep(0.8)
 
     st.markdown(
         """
