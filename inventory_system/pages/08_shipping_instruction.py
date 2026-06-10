@@ -181,7 +181,7 @@ if st.button("📋 ピッキングリスト作成"):
         elements.append(
             Image(
                 logo_path,
-                width=170 * mm,
+                width=150 * mm,
                 height=20 * mm
             )
         )
