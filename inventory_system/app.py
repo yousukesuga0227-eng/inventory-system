@@ -517,5 +517,5 @@ for i in range(0, len(menu_items), 3):
 st.write("---")
 
 st.caption(
-    "大阪陸運 八尾倉庫 在庫管理システム Ver 1.03"
+    "大阪陸運 八尾倉庫 在庫管理システム Ver 1.08"
 )
