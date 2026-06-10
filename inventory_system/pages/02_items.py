@@ -464,7 +464,8 @@ SELECT
     items.id AS id,
     projects.name AS project_name,
     items.code AS code,
-    items.name AS name
+    items.name AS name,
+    COALESCE(items.required_quantity, 1) AS required_quantity
 FROM items
 LEFT JOIN projects
     ON items.project_id = projects.id
@@ -514,10 +515,13 @@ for row in rows:
 
     item_list.append(
     {
-        "ID": row["id"],
-        "案件名": row["project_name"],
-        "商品コード": row["code"],
-        "商品名": row["name"]
+        {
+            "ID": row["id"],
+            "案件名": row["project_name"],
+            "商品コード": row["code"],
+            "商品名": row["name"],
+            "必要個数": row["required_quantity"]
+        }
     }
      )
 

@@ -1,11 +1,9 @@
 import streamlit as st
 from database import get_connection
 from auth import check_login
-
 import os
 from io import BytesIO
 from datetime import datetime
-
 from reportlab.platypus import (
     SimpleDocTemplate,
     Paragraph,
@@ -14,16 +12,14 @@ from reportlab.platypus import (
     Table,
     TableStyle
 )
-
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4, landscape
 from reportlab.lib.units import mm
 from reportlab.graphics.barcode import code128
-
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.lib.styles import getSampleStyleSheet
-
+from collections import Counter
 
 check_login()
 conn = get_connection()
@@ -125,9 +121,10 @@ items = conn.execute(
     """
     SELECT
         code,
-        name
-    FROM items
-    WHERE
+        name,
+        COALESCE(required_quantity, 1) AS required_quantity
+        FROM items
+        WHERE
         project_id = ?
         AND COALESCE(is_active, TRUE) = TRUE
     ORDER BY code
@@ -141,6 +138,10 @@ if not items:
 
 item_map = {
     str(item["code"]): item["name"]
+    for item in items
+}
+quantity_map = {
+    str(item["code"]): item["required_quantity"]
     for item in items
 }
 
@@ -227,6 +228,7 @@ if st.button("📋 ピッキングリスト作成"):
             "No.",
             "商品コード",
             "商品名",
+            "必要個数",
             "バーコード",
             "ピッキング",
             "備考"
@@ -249,6 +251,7 @@ if st.button("📋 ピッキングリスト作成"):
                 str(index),
                 item_code,
                 Paragraph(item_name, normal_style),
+                str(item["required_quantity"]),
                 barcode_obj,
                 "□",
                 ""
@@ -260,7 +263,8 @@ if st.button("📋 ピッキングリスト作成"):
         colWidths=[
             10 * mm,
             35 * mm,
-            75 * mm,
+            70 * mm,
+            20 * mm,
             65 * mm,
             25 * mm,
             35 * mm
@@ -316,6 +320,62 @@ if st.button("読み取りリセット"):
     st.rerun()
 
 scanned_codes = st.session_state.shipping_scanned_codes
+scan_counter = Counter(scanned_codes)
+
+required_total = sum(
+    int(quantity_map[code])
+    for code in quantity_map
+)
+
+checked_total = sum(
+    min(scan_counter.get(code, 0), int(quantity_map[code]))
+    for code in quantity_map
+)
+
+progress_rate = 0
+
+if required_total > 0:
+    progress_rate = checked_total / required_total
+st.subheader("検品進捗")
+
+st.progress(progress_rate)
+
+st.metric(
+    "検品数",
+    f"{checked_total} / {required_total}"
+)
+
+check_status_list = []
+
+for code, name in item_map.items():
+
+    required_qty = int(quantity_map[code])
+    scanned_qty = scan_counter.get(code, 0)
+
+    if scanned_qty == required_qty:
+        status = "✅ OK"
+    elif scanned_qty == 0:
+        status = "未検品"
+    elif scanned_qty < required_qty:
+        status = "🟡 不足"
+    else:
+        status = "🔴 読み過ぎ"
+
+    check_status_list.append(
+        {
+            "商品コード": code,
+            "商品名": name,
+            "必要個数": required_qty,
+            "読取個数": scanned_qty,
+            "状態": status
+        }
+    )
+
+st.dataframe(
+    check_status_list,
+    use_container_width=True,
+    hide_index=True
+)
 
 st.subheader("読み取り結果")
 
@@ -390,34 +450,19 @@ else:
         st.warning(
             f"重複読み取りがあります：{len(duplicate_codes)}件"
         )
-
-required_codes = set(item_map.keys())
-checked_codes = set([
-    code for code in scanned_codes
-    if code in item_map
-])
-
-missing_codes = required_codes - checked_codes
+all_quantity_ok = all(
+    scan_counter.get(code, 0) == int(quantity_map[code])
+    for code in quantity_map
+)
 
 can_create_pdf = (
     len(scanned_codes) > 0
     and len(invalid_results) == 0
-    and len(missing_codes) == 0
+    and all_quantity_ok
 )
 
-if missing_codes:
-    st.warning("未検品の商品があります。")
-    st.dataframe(
-        [
-            {
-                "商品コード": code,
-                "商品名": item_map[code]
-            }
-            for code in sorted(missing_codes)
-        ],
-        use_container_width=True,
-        hide_index=True
-    )
+if not all_quantity_ok:
+    st.warning("必要個数と読取個数が一致していない商品があります。")
 
 if not can_create_pdf:
     st.warning("出荷指示書は、読み取り結果がすべてOKになった時だけ作成できます。")
