@@ -181,8 +181,8 @@ if st.button("📋 ピッキングリスト作成"):
         elements.append(
             Image(
                 logo_path,
-                width=75 * mm,
-                height=18 * mm
+                width=110 * mm,
+                height=27 * mm
             )
         )
         elements.append(Spacer(1, 8))
@@ -265,9 +265,9 @@ if st.button("📋 ピッキングリスト作成"):
             35 * mm,
             70 * mm,
             20 * mm,
-            65 * mm,
+            75 * mm,
             25 * mm,
-            35 * mm
+            25 * mm
         ],
         repeatRows=1
     )
