@@ -314,9 +314,11 @@ st.text_input(
     on_change=add_barcode
 )
 
-if st.button("読み取りリセット"):
+def reset_shipping_scan():
     st.session_state.shipping_scanned_codes = []
-    st.session_state.shipping_barcode_input = ""
+
+if st.button("読み取りリセット"):
+    reset_shipping_scan()
     st.rerun()
 
 scanned_codes = st.session_state.shipping_scanned_codes
