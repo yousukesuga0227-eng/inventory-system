@@ -160,7 +160,7 @@ if st.button("商品登録"):
 st.subheader("CSVで商品一括登録")
 
 st.info(
-    "CSVの列名は「商品コード」「商品名」にしてください。選択中の案件にまとめて登録されます。"
+    "CSVの列名は「商品コード」「商品名」「必要個数」にしてください。必要個数が無い場合は1で登録されます。"
 )
 
 # サンプルCSVダウンロード
@@ -168,11 +168,13 @@ sample_df = pd.DataFrame(
     [
         {
             "商品コード": "05-005",
-            "商品名": "Falcon ダイニングチェア"
+            "商品名": "Falcon ダイニングチェア",
+            "必要個数": 4
         },
         {
             "商品コード": "05-006",
-            "商品名": "Tsubomi テーブル"
+            "商品名": "Tsubomi テーブル",
+            "必要個数": 1
         }
     ]
 )
@@ -219,6 +221,8 @@ if uploaded_file is not None:
         "商品コード",
         "商品名"
     ]
+    if "必要個数" not in df_upload.columns:
+        df_upload["必要個数"] = 1
 
     missing_columns = [
         col
@@ -235,7 +239,7 @@ if uploaded_file is not None:
     else:
 
         df_upload = df_upload[
-            required_columns
+        required_columns + ["必要個数"]
         ].fillna("")
 
         df_upload["商品コード"] = (
@@ -249,6 +253,16 @@ if uploaded_file is not None:
             .astype(str)
             .str.strip()
         )
+
+        df_upload["必要個数"] = pd.to_numeric(
+            df_upload["必要個数"],
+            errors="coerce"
+        ).fillna(1).astype(int)
+
+        df_upload.loc[
+            df_upload["必要個数"] < 1,
+            "必要個数"
+        ] = 1
 
         # 空行除外
         df_upload = df_upload[
@@ -275,6 +289,7 @@ if uploaded_file is not None:
 
                 item_code = row["商品コード"]
                 item_name = row["商品名"]
+                item_required_quantity = int(row["必要個数"])
 
                 # 同じ案件内で商品コード重複チェック
                 exists = conn.execute(
@@ -301,16 +316,18 @@ if uploaded_file is not None:
                 conn.execute(
                     """
                     INSERT INTO items(
-                        code,
-                        name,
-                        project_id
-                    )
-                    VALUES (?, ?, ?)
+                    code,
+                    name,
+                    project_id,
+                    required_quantity
+                )
+                VALUES (?, ?, ?, ?)
                     """,
                     (
                         item_code,
                         item_name,
-                        project_id
+                        project_id,
+                        item_required_quantity
                     )
                 )
 
