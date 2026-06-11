@@ -513,19 +513,19 @@ item_list = []
 
 for row in rows:
 
-    item_list.append(
+    
+        item_list.append(
     {
-        {
-            "ID": row["id"],
-            "案件名": row["project_name"],
-            "商品コード": row["code"],
-            "商品名": row["name"],
-            "必要個数": row["required_quantity"]
-        }
+        "ID": row["id"],
+        "案件名": row["project_name"],
+        "商品コード": row["code"],
+        "商品名": row["name"],
+        "必要個数": int(row["required_quantity"] or 1)
     }
-     )
+)
+     
 
 st.dataframe(
     item_list,
-    width="stretch"
+    use_container_width=True
 )
