@@ -285,7 +285,7 @@ st.markdown(
 
 st.markdown(
     """
-    <a class="help-button"href="/99_manual"_self">
+    <a class="help-button"href="/99_manual" target="_self">
         ❓ ヘルプ
     </a>
     """,
