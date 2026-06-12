@@ -290,17 +290,6 @@ st.markdown(
 
 if os.path.exists(logo_path):
 
-    col1, col2, col3 = st.columns([1, 3, 0.6])
-
-    with col2:
-
-        st.image(
-            logo_path,
-            use_container_width=True
-        )
-
-if os.path.exists(logo_path):
-
     header_left, header_right = st.columns([8, 1])
 
     with header_right:
