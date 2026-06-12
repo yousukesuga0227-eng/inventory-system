@@ -277,6 +277,13 @@ if os.path.exists(logo_path):
             use_container_width=True
         )
 
+    with col3:
+
+        st.page_link(
+            "pages/99_操作マニュアル.py",
+            label="📖 操作マニュアル"
+        )
+
 else:
 
     st.markdown(
@@ -517,5 +524,5 @@ for i in range(0, len(menu_items), 3):
 st.write("---")
 
 st.caption(
-    "大阪陸運 八尾倉庫 在庫管理システム Ver 1.08"
+    "大阪陸運 八尾倉庫 在庫管理システム Ver 1.101"
 )
