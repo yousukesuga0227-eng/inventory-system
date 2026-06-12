@@ -40,7 +40,7 @@ name = st.text_input(
 )
 
 required_quantity = st.number_input(
-    "必要個数",
+    "商品小口数",
     min_value=1,
     value=1,
     step=1
@@ -160,7 +160,7 @@ if st.button("商品登録"):
 st.subheader("CSVで商品一括登録")
 
 st.info(
-    "CSVの列名は「商品コード」「商品名」「必要個数」にしてください。必要個数が無い場合は1で登録されます。"
+    "CSVの列名は「商品コード」「商品名」「商品小口数」にしてください。商品小口数が無い場合は1で登録されます。"
 )
 
 # サンプルCSVダウンロード
@@ -169,12 +169,12 @@ sample_df = pd.DataFrame(
         {
             "商品コード": "05-005",
             "商品名": "Falcon ダイニングチェア",
-            "必要個数": 4
+            "商品小口数": 4
         },
         {
             "商品コード": "05-006",
             "商品名": "Tsubomi テーブル",
-            "必要個数": 1
+            "商品小口数": 1
         }
     ]
 )
@@ -221,8 +221,8 @@ if uploaded_file is not None:
         "商品コード",
         "商品名"
     ]
-    if "必要個数" not in df_upload.columns:
-        df_upload["必要個数"] = 1
+    if "商品小口数" not in df_upload.columns:
+        df_upload["商品小口数"] = 1
 
     missing_columns = [
         col
@@ -239,7 +239,7 @@ if uploaded_file is not None:
     else:
 
         df_upload = df_upload[
-        required_columns + ["必要個数"]
+        required_columns + ["商品小口数"]
         ].fillna("")
 
         df_upload["商品コード"] = (
@@ -254,14 +254,14 @@ if uploaded_file is not None:
             .str.strip()
         )
 
-        df_upload["必要個数"] = pd.to_numeric(
-            df_upload["必要個数"],
+        df_upload["商品小口数"] = pd.to_numeric(
+            df_upload["商品小口数"],
             errors="coerce"
         ).fillna(1).astype(int)
 
         df_upload.loc[
-            df_upload["必要個数"] < 1,
-            "必要個数"
+            df_upload["商品小口数"] < 1,
+            "商品小口数"
         ] = 1
 
         # 空行除外
@@ -289,7 +289,7 @@ if uploaded_file is not None:
 
                 item_code = row["商品コード"]
                 item_name = row["商品名"]
-                item_required_quantity = int(row["必要個数"])
+                item_required_quantity = int(row["商品小口数"])
 
                 # 同じ案件内で商品コード重複チェック
                 exists = conn.execute(
@@ -389,7 +389,8 @@ label_query = """
 SELECT
     items.code AS 商品コード,
     items.name AS 商品名,
-    projects.name AS 案件名
+    projects.name AS 案件名,
+    COALESCE(items.required_quantity,1) AS 商品小口数
 FROM items
 LEFT JOIN projects
     ON items.project_id = projects.id
@@ -418,14 +419,20 @@ label_rows = conn.execute(
 label_list = []
 
 for row in label_rows:
-    label_list.append(
-        {
-            "商品コード": row["商品コード"],
-            "商品名": row["商品名"],
-            "案件名": row["案件名"],
-            "バーコード文字": str(row["商品コード"])
-        }
-    )
+
+    qty = int(row["商品小口数"])
+
+    for _ in range(qty):
+
+        label_list.append(
+            {
+                "商品コード": row["商品コード"],
+                "商品名": row["商品名"],
+                "案件名": row["案件名"],
+                "商品小口数": row["商品小口数"],
+                "バーコード文字": str(row["商品コード"])
+            }
+        )
 
 df_labels = pd.DataFrame(label_list)
 
@@ -520,7 +527,7 @@ for row in rows:
         "案件名": row["project_name"],
         "商品コード": row["code"],
         "商品名": row["name"],
-        "必要個数": int(row["required_quantity"] or 1)
+        "商品小口数": int(row["required_quantity"] or 1)
     }
 )
      
