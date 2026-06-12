@@ -280,9 +280,9 @@ if os.path.exists(logo_path):
     with col3:
 
         st.page_link(
-            "pages/99_操作マニュアル.py",
-            label="📖 操作マニュアル"
-        )
+    "pages/99_manual.py",
+    label="📖 操作マニュアル"
+)
 
 else:
 
