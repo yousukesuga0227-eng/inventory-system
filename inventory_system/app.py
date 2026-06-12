@@ -283,14 +283,6 @@ st.markdown(
     unsafe_allow_html=True
 )
 
-st.markdown(
-    """
-    <a class="help-button"href="/99_manual" target="_self">
-        ❓ ヘルプ
-    </a>
-    """,
-    unsafe_allow_html=True
-)
 
 # =====================
 # TOPタイトル
@@ -307,15 +299,23 @@ if os.path.exists(logo_path):
             use_container_width=True
         )
 
-    with col3:
-        st.markdown("<div style='text-align:right;'>", unsafe_allow_html=True)
+if os.path.exists(logo_path):
 
-    st.page_link(
-        "pages/99_manual.py",
-        label="📖 操作マニュアル"
-    )
+    header_left, header_right = st.columns([8, 1])
 
-    st.markdown("</div>", unsafe_allow_html=True)
+    with header_right:
+        st.page_link(
+            "pages/99_manual.py",
+            label="❓ ヘルプ"
+        )
+
+    col1, col2, col3 = st.columns([1, 3, 1])
+
+    with col2:
+        st.image(
+            logo_path,
+            use_container_width=True
+        )
 
 else:
 
