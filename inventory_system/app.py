@@ -241,12 +241,33 @@ st.markdown(
         transform: translateY(-2px);
     }
 
+    .help-button {
+        position: fixed;
+        top: 90px;
+        right: 80px;
+        z-index: 9999;
+        background-color: #ffffff;
+        border: 1px solid #dddddd;
+        border-radius: 14px;
+        padding: 12px 18px;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.12);
+        font-weight: 700;
+        font-size: 16px;
+        text-decoration: none;
+        color: #222222;
+    }
+
+    .help-button:hover {
+        background-color: #f5f7fa;
+        border-color: #999999;
+    }
+
     .menu-title {
-    font-size: 34px;
-    font-weight: 800;
-    margin-top: 20px;
-    margin-bottom: 14px;
-}
+        font-size: 34px;
+        font-weight: 800;
+        margin-top: 20px;
+        margin-bottom: 14px;
+    }
 
     .system-subtitle {
         text-align: center;
@@ -258,6 +279,15 @@ st.markdown(
         margin-bottom: 20px;
     }
     </style>
+    """,
+    unsafe_allow_html=True
+)
+
+st.markdown(
+    """
+    <a class="help-button" href="/manual" target="_self">
+        ❓ ヘルプ
+    </a>
     """,
     unsafe_allow_html=True
 )
