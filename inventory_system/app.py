@@ -268,7 +268,7 @@ st.markdown(
 
 if os.path.exists(logo_path):
 
-    col1, col2, col3 = st.columns([1, 2, 1])
+    col1, col2, col3 = st.columns([1, 3, 0.6])
 
     with col2:
 
@@ -278,11 +278,14 @@ if os.path.exists(logo_path):
         )
 
     with col3:
+        st.markdown("<div style='text-align:right;'>", unsafe_allow_html=True)
 
-        st.page_link(
-    "pages/99_manual.py",
-    label="📖 操作マニュアル"
-)
+    st.page_link(
+        "pages/99_manual.py",
+        label="📖 操作マニュアル"
+    )
+
+    st.markdown("</div>", unsafe_allow_html=True)
 
 else:
 
