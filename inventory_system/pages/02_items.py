@@ -84,17 +84,18 @@ if st.button("商品登録"):
         cursor = conn.execute(
             """
             INSERT INTO items(
-            code,
-            name,
-            project_id,
-            required_quantity
-        )
-            VALUES (?, ?, ?)
+                code,
+                name,
+                project_id,
+                required_quantity
+            )
+            VALUES (?, ?, ?, ?)
             """,
             (
                 code,
                 name,
-                project_id
+                project_id,
+                required_quantity
             )
         )
 
