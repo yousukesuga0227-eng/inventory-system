@@ -596,3 +596,40 @@ with tabs[3]:
             use_container_width=True,
             hide_index=True
         )
+
+
+# =====================
+# 🕶 SHARK BLACK BOX
+# =====================
+
+st.markdown("---")
+
+col1, col2 = st.columns([1, 10])
+
+with col1:
+    if st.button("ver1.1", key="secret_black_box_button"):
+        st.session_state.show_black_box = not st.session_state.get(
+            "show_black_box",
+            False
+        )
+
+if st.session_state.get("show_black_box", False):
+
+    st.subheader("🕶 SHARK BLACK BOX")
+
+    logs = conn.execute("""
+        SELECT
+            username AS ユーザーID,
+            display_name AS 表示名,
+            role AS 権限,
+            login_at AS ログイン日時
+        FROM login_logs
+        ORDER BY login_at DESC
+        LIMIT 100
+    """).fetchall()
+
+    st.dataframe(
+        logs,
+        use_container_width=True,
+        hide_index=True
+    )
