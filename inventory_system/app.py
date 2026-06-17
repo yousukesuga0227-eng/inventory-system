@@ -406,6 +406,10 @@ def home_page():
                     "page": "pages/10_admin.py",
                     "label": "⚙️ 管理ページ"
                 },
+                {
+                    "page": "pages/11_user_admin.py",
+                    "label": "👤 ユーザー管理"
+                },
             ]
         )
 
@@ -457,6 +461,7 @@ if st.session_state.role == "admin":
             st.Page("pages/06_inventory_check.py", title="棚卸", icon="🧮"),
             st.Page("pages/09_operation_logs.py", title="操作履歴", icon="🧾"),
             st.Page("pages/10_admin.py", title="管理ページ", icon="⚙️"),
+            st.Page("pages/11_user_admin.py", title="ユーザー管理", icon="👤"),
         ]
     )
 
