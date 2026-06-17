@@ -2,6 +2,7 @@ import os
 import sqlite3
 from pathlib import Path
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 BASE_DIR = Path(__file__).resolve().parent
 DB_PATH = BASE_DIR / "data" / "inventory.db"
@@ -171,7 +172,7 @@ def log_action(
             target_id,
             target_name,
             detail,
-            datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            datetime.now(ZoneInfo("Asia/Tokyo"))
         )
     )
 
