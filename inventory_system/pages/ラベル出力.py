@@ -202,7 +202,7 @@ QL820_MODEL = "QL-820NWB"
 # 今回成功したテストロール設定
 DEFAULT_QL820_LABEL_SIZE = "62red"
 DEFAULT_QL820_RED = True
-DEFAULT_QL820_CUT = False
+DEFAULT_QL820_CUT = True
 
 
 # =========================
