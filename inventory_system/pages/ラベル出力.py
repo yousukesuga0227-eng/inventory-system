@@ -447,19 +447,19 @@ def make_label_png(item):
         barcode_img = make_barcode_png(item_code)
 
         # 横幅をラベルいっぱいに近づける
-        target_w = width_px - 10
+        target_w = width_px - 20
         ratio = target_w / barcode_img.width
         target_h = int(barcode_img.height * ratio)
 
         # 縦方向も少し大きくする
-        target_h = int(target_h * 1.3)
+        target_h = int(target_h * 1.5)
 
         barcode_img = barcode_img.resize((target_w, target_h))
 
         x = int((width_px - target_w) / 2)
 
         # 下ギリギリに配置
-        y_bar = height_px - target_h - 5
+        y_bar = height_px - target_h - 8
 
         img.paste(barcode_img, (x, y_bar))
 
