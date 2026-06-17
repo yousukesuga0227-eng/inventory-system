@@ -403,7 +403,7 @@ def make_label_png(item):
 
     item_text = f"商品名：{item_name}"
 
-    item_font = ImageFont.truetype(font_path, 26) if font_path else ImageFont.load_default()
+    item_font = ImageFont.truetype(font_path, 36) if font_path else ImageFont.load_default()
 
     max_chars = 18
 
