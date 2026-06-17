@@ -105,40 +105,67 @@ def fetch_all(conn, query, params=None):
 # =========================
 # フォント
 # =========================
+import glob
+
 def find_japanese_font():
-    """
-    PNG用日本語フォント。
-    Windows / Linux / Streamlit Cloudっぽい場所を探す。
-    見つからなければデフォルト。
-    """
     candidates = [
         r"C:\Windows\Fonts\meiryo.ttc",
         r"C:\Windows\Fonts\msgothic.ttc",
         r"C:\Windows\Fonts\YuGothM.ttc",
         r"C:\Windows\Fonts\YuGothR.ttc",
+
         "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
         "/usr/share/fonts/opentype/noto/NotoSansCJKjp-Regular.otf",
         "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/noto/NotoSansJP-Regular.ttf",
+
+        "/usr/share/fonts/truetype/fonts-japanese-gothic.ttf",
+        "/usr/share/fonts/truetype/takao-gothic/TakaoGothic.ttf",
+        "/usr/share/fonts/opentype/ipafont-gothic/ipag.ttf",
+        "/usr/share/fonts/opentype/ipaexfont-gothic/ipaexg.ttf",
+    ]
+
+    patterns = [
+        "/usr/share/fonts/**/NotoSansCJK*.ttc",
+        "/usr/share/fonts/**/NotoSansJP*.ttf",
+        "/usr/share/fonts/**/*Gothic*.ttf",
+        "/usr/share/fonts/**/*Gothic*.ttc",
+        "/usr/share/fonts/**/*Mincho*.ttf",
+        "/usr/share/fonts/**/*Mincho*.ttc",
     ]
 
     for path in candidates:
         if os.path.exists(path):
             return path
 
+    for pattern in patterns:
+        found = glob.glob(pattern, recursive=True)
+        if found:
+            return found[0]
+
     return None
 
 
+FONT_PATH = find_japanese_font()
+
+if FONT_PATH:
+    st.sidebar.success(
+        f"日本語フォントOK：{os.path.basename(FONT_PATH)}"
+    )
+else:
+    st.sidebar.error(
+        "日本語フォントが見つかりません。ラベル文字が化ける可能性があります。"
+    )
+
+
 def fit_text(draw, text, font_path, max_width, start_size, min_size=18):
-    """
-    指定幅に収まるフォントサイズを自動調整。
-    """
     text = str(text or "")
 
     if not font_path:
         return ImageFont.load_default()
 
     size = start_size
+
     while size >= min_size:
         font = ImageFont.truetype(font_path, size)
         bbox = draw.textbbox((0, 0), text, font=font)
@@ -153,9 +180,6 @@ def fit_text(draw, text, font_path, max_width, start_size, min_size=18):
 
 
 def safe_filename(text):
-    """
-    ファイル名に使えない文字を簡易除去。
-    """
     text = str(text or "")
     for ch in ['\\', '/', ':', '*', '?', '"', '<', '>', '|']:
         text = text.replace(ch, "_")
@@ -269,7 +293,7 @@ def make_label_png(item):
     img = Image.new("RGB", (width_px, height_px), "white")
     draw = ImageDraw.Draw(img)
 
-    font_path = find_japanese_font()
+    font_path = FONT_PATH
 
     if font_path:
         font_header = ImageFont.truetype(font_path, 34)
