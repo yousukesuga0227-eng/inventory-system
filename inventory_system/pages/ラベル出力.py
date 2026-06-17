@@ -485,7 +485,7 @@ def make_label_png(item):
         barcode_img = barcode_img.resize((target_w, target_h))
 
         x = int((width_px - target_w) / 2)
-        y_bar = height_px - target_h - 22
+        y_bar = height_px - target_h - 18
 
         img.paste(barcode_img, (x, y_bar))
 
