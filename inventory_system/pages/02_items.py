@@ -6,9 +6,9 @@ from database import get_connection, log_action
 from auth import check_admin
 import pandas as pd
 from io import BytesIO
+from datetime import datetime
 
 check_admin()
-
 
 conn = get_connection()
 
@@ -17,23 +17,119 @@ st.success(
     f"ログイン中：{st.session_state.get('display_name', st.session_state.username)}"
 )
 
+
+# =====================
+# 商品コード自動採番
+# 企業コード4桁-年月4桁-連番4桁
+# 例：1001-2606-0007
+# =====================
+
+def generate_item_code(conn, project_id):
+    project = conn.execute(
+        """
+        SELECT
+            projects.id,
+            projects.code AS project_code,
+            companies.code AS company_code
+        FROM projects
+        LEFT JOIN companies
+            ON projects.company_id = companies.id
+        WHERE projects.id = ?
+        """,
+        (project_id,)
+    ).fetchone()
+
+    ym = datetime.now().strftime("%y%m")
+
+    if project and project["company_code"]:
+        company_code = str(project["company_code"]).strip()
+    else:
+        company_code = "0000"
+
+    prefix = f"{company_code}-{ym}"
+
+    row = conn.execute(
+        """
+        SELECT code
+        FROM items
+        WHERE code LIKE ?
+        ORDER BY code DESC
+        LIMIT 1
+        """,
+        (f"{prefix}-%",)
+    ).fetchone()
+
+    if row:
+        last_number = int(str(row["code"]).split("-")[-1])
+        next_number = last_number + 1
+    else:
+        next_number = 1
+
+    return f"{prefix}-{next_number:04d}"
+
+
+def create_barcode(project_code, item_code):
+    barcode_data = f"{project_code}_{item_code}"
+
+    os.makedirs(
+        "barcodes/project_items",
+        exist_ok=True
+    )
+
+    barcode_class = barcode.get_barcode_class("code128")
+
+    barcode_obj = barcode_class(
+        barcode_data,
+        writer=ImageWriter()
+    )
+
+    barcode_obj.save(
+        f"barcodes/project_items/{barcode_data}"
+    )
+
+    return barcode_data
+
+
+# =====================
 # 案件一覧取得
+# =====================
+
 projects = conn.execute(
     """
     SELECT *
     FROM projects
-    WHERE
-        COALESCE(is_hidden, FALSE) = FALSE
+    WHERE COALESCE(is_hidden, FALSE) = FALSE
     ORDER BY name
     """
 ).fetchall()
 
-# 商品コード
-code = st.text_input(
-    "商品コード",
-    key="new_item_code"
+project_options = {
+    project["name"]: project["id"]
+    for project in projects
+}
+
+if not project_options:
+    st.warning("先に案件を登録してください")
+    st.stop()
+
+selected_project = st.selectbox(
+    "案件選択",
+    list(project_options.keys())
 )
-# 商品名
+
+project_id = project_options[selected_project]
+
+preview_code = generate_item_code(conn, project_id)
+
+st.info(
+    f"次に発行される商品コード：{preview_code}"
+)
+
+
+# =====================
+# 商品登録
+# =====================
+
 name = st.text_input(
     "商品名",
     key="new_item_name"
@@ -46,41 +142,31 @@ required_quantity = st.number_input(
     step=1
 )
 
-# 案件選択
-project_options = {
-    project["name"]: project["id"]
-    for project in projects
-}
-
-if not project_options:
-
-    st.warning(
-        "先に案件を登録してください"
-    )
-
-    st.stop()
-    
-
-selected_project = st.selectbox(
-    "案件選択",
-    list(project_options.keys())
-)
-
-project_id = project_options[
-    selected_project
-]
-
 if st.button("商品登録"):
 
-    if not code or not name:
+    if not name.strip():
 
-        st.warning(
-            "商品コードと商品名を入力してください"
-        )
+        st.warning("商品名を入力してください")
 
     else:
 
-        # 商品登録
+        code = generate_item_code(conn, project_id)
+
+        exists = conn.execute(
+            """
+            SELECT id
+            FROM items
+            WHERE code = ?
+            """,
+            (code,)
+        ).fetchone()
+
+        if exists:
+            st.error(
+                "商品コードが重複しました。もう一度登録ボタンを押してください。"
+            )
+            st.stop()
+
         cursor = conn.execute(
             """
             INSERT INTO items(
@@ -93,14 +179,13 @@ if st.button("商品登録"):
             """,
             (
                 code,
-                name,
+                name.strip(),
                 project_id,
                 required_quantity
             )
         )
 
         new_item_id = cursor.lastrowid
-
         conn.commit()
 
         log_action(
@@ -108,11 +193,10 @@ if st.button("商品登録"):
             "商品登録",
             "items",
             new_item_id,
-            name,
+            name.strip(),
             f"商品コード: {code} / 案件ID: {project_id}"
         )
 
-        # 案件コード取得
         project_row = conn.execute(
             """
             SELECT *
@@ -124,35 +208,12 @@ if st.button("商品登録"):
 
         project_code = project_row["code"]
 
-        # 案件 + 商品コード
-        barcode_data = (
-            f"{project_code}_{code}"
-        )
-
-        # 保存フォルダ作成
-        os.makedirs(
-            "barcodes/project_items",
-            exist_ok=True
-        )
-
-        # バーコード生成
-        barcode_class = barcode.get_barcode_class(
-            "code128"
-        )
-
-        barcode_obj = barcode_class(
-            barcode_data,
-            writer=ImageWriter()
-        )
-
-        # 保存
-        barcode_obj.save(
-            f"barcodes/project_items/{barcode_data}"
-        )
+        create_barcode(project_code, code)
 
         st.success(
-            "商品 + 案件バーコード生成完了"
+            f"商品登録完了：{code} / {name.strip()}"
         )
+
 
 # =====================
 # CSV一括登録
@@ -161,19 +222,19 @@ if st.button("商品登録"):
 st.subheader("CSVで商品一括登録")
 
 st.info(
-    "CSVの列名は「商品コード」「商品名」「商品小口数」にしてください。商品小口数が無い場合は1で登録されます。"
+    "CSVの列名は「商品名」「商品小口数」にしてください。"
+    "「商品コード」列がある場合はそのコードを使用、空欄なら自動採番します。"
 )
 
-# サンプルCSVダウンロード
 sample_df = pd.DataFrame(
     [
         {
-            "商品コード": "05-005",
+            "商品コード": "",
             "商品名": "Falcon ダイニングチェア",
             "商品小口数": 4
         },
         {
-            "商品コード": "05-006",
+            "商品コード": "",
             "商品名": "Tsubomi テーブル",
             "商品小口数": 1
         }
@@ -205,25 +266,26 @@ if uploaded_file is not None:
             BytesIO(csv_bytes),
             encoding="cp932"
         )
-
     except UnicodeDecodeError:
         df_upload = pd.read_csv(
             BytesIO(csv_bytes),
             encoding="utf-8-sig"
         )
 
-    # 列名の空白除去
     df_upload.columns = [
         str(col).strip()
         for col in df_upload.columns
     ]
 
-    required_columns = [
-        "商品コード",
-        "商品名"
-    ]
+    if "商品コード" not in df_upload.columns:
+        df_upload["商品コード"] = ""
+
     if "商品小口数" not in df_upload.columns:
         df_upload["商品小口数"] = 1
+
+    required_columns = [
+        "商品名"
+    ]
 
     missing_columns = [
         col
@@ -240,7 +302,7 @@ if uploaded_file is not None:
     else:
 
         df_upload = df_upload[
-        required_columns + ["商品小口数"]
+            ["商品コード", "商品名", "商品小口数"]
         ].fillna("")
 
         df_upload["商品コード"] = (
@@ -265,10 +327,8 @@ if uploaded_file is not None:
             "商品小口数"
         ] = 1
 
-        # 空行除外
         df_upload = df_upload[
-            (df_upload["商品コード"] != "")
-            & (df_upload["商品名"] != "")
+            df_upload["商品名"] != ""
         ]
 
         st.write(
@@ -286,24 +346,35 @@ if uploaded_file is not None:
             created_count = 0
             skipped_items = []
 
+            project_row = conn.execute(
+                """
+                SELECT *
+                FROM projects
+                WHERE id = ?
+                """,
+                (project_id,)
+            ).fetchone()
+
+            project_code = project_row["code"]
+
             for _, row in df_upload.iterrows():
 
-                item_code = row["商品コード"]
-                item_name = row["商品名"]
+                csv_code = str(row["商品コード"]).strip()
+                item_name = str(row["商品名"]).strip()
                 item_required_quantity = int(row["商品小口数"])
 
-                # 同じ案件内で商品コード重複チェック
+                if csv_code:
+                    item_code = csv_code
+                else:
+                    item_code = generate_item_code(conn, project_id)
+
                 exists = conn.execute(
                     """
                     SELECT id
                     FROM items
-                    WHERE project_id = ?
-                      AND code = ?
+                    WHERE code = ?
                     """,
-                    (
-                        project_id,
-                        item_code
-                    )
+                    (item_code,)
                 ).fetchone()
 
                 if exists:
@@ -314,15 +385,15 @@ if uploaded_file is not None:
 
                     continue
 
-                conn.execute(
+                cursor = conn.execute(
                     """
                     INSERT INTO items(
-                    code,
-                    name,
-                    project_id,
-                    required_quantity
-                )
-                VALUES (?, ?, ?, ?)
+                        code,
+                        name,
+                        project_id,
+                        required_quantity
+                    )
+                    VALUES (?, ?, ?, ?)
                     """,
                     (
                         item_code,
@@ -331,6 +402,19 @@ if uploaded_file is not None:
                         item_required_quantity
                     )
                 )
+
+                new_item_id = cursor.lastrowid
+
+                log_action(
+                    st.session_state.username,
+                    "商品CSV登録",
+                    "items",
+                    new_item_id,
+                    item_name,
+                    f"商品コード: {item_code} / 案件ID: {project_id}"
+                )
+
+                create_barcode(project_code, item_code)
 
                 created_count += 1
 
@@ -357,30 +441,37 @@ if uploaded_file is not None:
 
                 st.write(skipped_items)
 
+
+# =====================
+# 商品一覧
+# =====================
+
 sort_option = st.selectbox(
     "並び順",
     [
         "ID順",
         "商品コード順",
-"商品名順"
+        "商品名順"
     ]
 )
 
 order_by = "items.id"
 
 if sort_option == "商品コード順":
-
     order_by = "items.code"
 
 elif sort_option == "商品名順":
-
     order_by = "items.name"
 
 st.subheader("商品一覧")
 
+
+# =====================
+# シール印刷用CSV出力
+# =====================
+
 st.subheader("シール印刷用CSV出力")
 
-# 案件で絞り込み
 label_project = st.selectbox(
     "CSV出力する案件",
     ["すべて"] + list(project_options.keys())
@@ -461,8 +552,11 @@ st.download_button(
 if df_labels.empty:
     st.info("出力できる商品がありません")
 
-    
+
+# =====================
 # 検索
+# =====================
+
 search_text = st.text_input(
     "商品検索"
 )
@@ -484,30 +578,20 @@ WHERE
 
 params = []
 
-# 検索条件
 if search_text:
 
     query += """
     AND (
-    items.code LIKE ?
-    OR items.name LIKE ?
-    OR projects.name LIKE ?
-)
+        items.code LIKE ?
+        OR items.name LIKE ?
+        OR projects.name LIKE ?
+    )
     """
 
-    params.append(
-        f"%{search_text}%"
-    )
+    params.append(f"%{search_text}%")
+    params.append(f"%{search_text}%")
+    params.append(f"%{search_text}%")
 
-    params.append(
-        f"%{search_text}%"
-    )
-    params.append(
-    f"%{search_text}%"
-    )
-
-
-# 並び順
 query += f"""
 ORDER BY {order_by}
 """
@@ -521,19 +605,19 @@ item_list = []
 
 for row in rows:
 
-    
-        item_list.append(
-    {
-        "ID": row["id"],
-        "案件名": row["project_name"],
-        "商品コード": row["code"],
-        "商品名": row["name"],
-        "商品小口数": int(row["required_quantity"] or 1)
-    }
-)
-     
+    item_list.append(
+        {
+            "ID": row["id"],
+            "案件名": row["project_name"],
+            "商品コード": row["code"],
+            "商品名": row["name"],
+            "商品小口数": int(row["required_quantity"] or 1)
+        }
+    )
 
 st.dataframe(
     item_list,
     use_container_width=True
 )
+
+conn.close()
