@@ -438,6 +438,7 @@ pages = [
     st.Page("pages/04_stock_list.py", title="在庫一覧", icon="📊"),
     st.Page("pages/07_item_search.py", title="商品検索", icon="🔍"),
     st.Page("pages/08_shipping_instruction.py", title="出荷指示書", icon="📄"),
+    st.Page("pages/99_manual.py", title="ヘルプ", icon="❓"),
 ]
 
 if st.session_state.role == "admin":
@@ -450,7 +451,6 @@ if st.session_state.role == "admin":
             st.Page("pages/06_inventory_check.py", title="棚卸", icon="🧮"),
             st.Page("pages/09_operation_logs.py", title="操作履歴", icon="🧾"),
             st.Page("pages/10_admin.py", title="管理ページ", icon="⚙️"),
-            st.Page("pages/99_manual.py", title="ヘルプ", icon="❓"),
         ]
     )
 
