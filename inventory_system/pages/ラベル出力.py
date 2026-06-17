@@ -342,15 +342,26 @@ def make_label_png(item):
     )
 
     # =========================
-    # 上段：案件 / 出荷日
+    # 上段：案件名 / 出荷日
     # =========================
     y = 16
 
+    project_text = f"案件：{project_name}"
+
+    project_font = fit_text(
+        draw,
+        project_text,
+        font_path,
+        520,
+        28,
+        18
+    )
+
     draw.text(
         (margin, y),
-        "案件",
+        project_text,
         fill="black",
-        font=font_header
+        font=project_font
     )
 
     if shipping_date:
@@ -362,7 +373,7 @@ def make_label_png(item):
         draw,
         date_text,
         font_path,
-        330,
+        300,
         22,
         16
     )
@@ -442,7 +453,6 @@ def make_label_png(item):
     # =========================
     # 企業名
     # =========================
-    y += 50
 
     company_text = f"企業名：{company_name}"
     company_font = fit_text(
