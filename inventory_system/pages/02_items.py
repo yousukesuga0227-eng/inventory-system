@@ -21,22 +21,29 @@ st.success(
 def generate_item_code(conn, project_id):
     project = conn.execute(
         """
-        SELECT code
-        FROM projects
-        WHERE id = ?
+        SELECT
+            p.id,
+            p.code AS project_code,
+            c.code AS company_code
+        FROM projects p
+        LEFT JOIN project_companies pc
+            ON p.id = pc.project_id
+        LEFT JOIN companies c
+            ON pc.company_id = c.id
+        WHERE p.id = ?
         """,
         (project_id,)
     ).fetchone()
 
     ym = datetime.now().strftime("%y%m")
 
-    if project and project["code"]:
-        base_code = str(project["code"]).strip()
+    if project and project["company_code"]:
+        company_code = str(project["company_code"]).upper().strip()
     else:
-        base_code = "0000"
+        company_code = "0000"
 
     company_code = (
-        base_code
+        company_code
         .replace("-", "")
         [:4]
         .zfill(4)
@@ -72,7 +79,6 @@ def create_barcode(project_code, item_code):
     os.makedirs("barcodes/project_items", exist_ok=True)
 
     barcode_class = barcode.get_barcode_class("code128")
-
     barcode_obj = barcode_class(
         barcode_data,
         writer=ImageWriter()
@@ -85,15 +91,22 @@ def create_barcode(project_code, item_code):
 
 projects = conn.execute(
     """
-    SELECT *
-    FROM projects
-    WHERE COALESCE(is_hidden, FALSE) = FALSE
-    ORDER BY name
+    SELECT
+        p.*,
+        c.code AS company_code,
+        c.name AS company_name
+    FROM projects p
+    LEFT JOIN project_companies pc
+        ON p.id = pc.project_id
+    LEFT JOIN companies c
+        ON pc.company_id = c.id
+    WHERE COALESCE(p.is_hidden, FALSE) = FALSE
+    ORDER BY c.code, p.name
     """
 ).fetchall()
 
 project_options = {
-    project["name"]: project["id"]
+    f"{project['company_code'] or '企業未設定'}：{project['name']}": project["id"]
     for project in projects
 }
 
@@ -248,7 +261,6 @@ if uploaded_file is not None:
         ).fillna(1).astype(int)
 
         df_upload.loc[df_upload["商品小口数"] < 1, "商品小口数"] = 1
-
         df_upload = df_upload[df_upload["商品名"] != ""]
 
         st.write(f"読み込み件数：{len(df_upload)}件")
@@ -352,12 +364,14 @@ if uploaded_file is not None:
 
 sort_option = st.selectbox(
     "並び順",
-    ["ID順", "商品コード順", "商品名順"]
+    ["ID順", "企業コード順", "商品コード順", "商品名順"]
 )
 
 order_by = "items.id"
 
-if sort_option == "商品コード順":
+if sort_option == "企業コード順":
+    order_by = "company_code"
+elif sort_option == "商品コード順":
     order_by = "items.code"
 elif sort_option == "商品名順":
     order_by = "items.name"
@@ -376,10 +390,16 @@ SELECT
     items.code AS 商品コード,
     items.name AS 商品名,
     projects.name AS 案件名,
+    companies.code AS 企業コード,
+    companies.name AS 企業名,
     COALESCE(items.required_quantity,1) AS 商品小口数
 FROM items
 LEFT JOIN projects
     ON items.project_id = projects.id
+LEFT JOIN project_companies
+    ON projects.id = project_companies.project_id
+LEFT JOIN companies
+    ON project_companies.company_id = companies.id
 WHERE
     COALESCE(items.is_active, TRUE) = TRUE
     AND COALESCE(projects.is_hidden, FALSE) = FALSE
@@ -389,12 +409,12 @@ label_params = []
 
 if label_project != "すべて":
     label_query += """
-    AND projects.name = ?
+    AND (COALESCE(companies.code, '企業未設定') || '：' || projects.name) = ?
     """
     label_params.append(label_project)
 
 label_query += """
-ORDER BY projects.name, items.code
+ORDER BY companies.code, projects.name, items.code
 """
 
 label_rows = conn.execute(label_query, label_params).fetchall()
@@ -408,6 +428,8 @@ for row in label_rows:
     for _ in range(qty):
         label_list.append(
             {
+                "企業コード": row["企業コード"],
+                "企業名": row["企業名"],
                 "商品コード": row["商品コード"],
                 "商品名": row["商品名"],
                 "案件名": row["案件名"],
@@ -442,6 +464,8 @@ search_text = st.text_input("商品検索")
 query = """
 SELECT
     items.id AS id,
+    companies.code AS company_code,
+    companies.name AS company_name,
     projects.name AS project_name,
     items.code AS code,
     items.name AS name,
@@ -449,6 +473,10 @@ SELECT
 FROM items
 LEFT JOIN projects
     ON items.project_id = projects.id
+LEFT JOIN project_companies
+    ON projects.id = project_companies.project_id
+LEFT JOIN companies
+    ON project_companies.company_id = companies.id
 WHERE
     COALESCE(items.is_active, TRUE) = TRUE
     AND COALESCE(projects.is_hidden, FALSE) = FALSE
@@ -462,12 +490,18 @@ if search_text:
         items.code LIKE ?
         OR items.name LIKE ?
         OR projects.name LIKE ?
+        OR companies.code LIKE ?
+        OR companies.name LIKE ?
     )
     """
 
-    params.append(f"%{search_text}%")
-    params.append(f"%{search_text}%")
-    params.append(f"%{search_text}%")
+    params.extend([
+        f"%{search_text}%",
+        f"%{search_text}%",
+        f"%{search_text}%",
+        f"%{search_text}%",
+        f"%{search_text}%"
+    ])
 
 query += f"""
 ORDER BY {order_by}
@@ -481,6 +515,8 @@ for row in rows:
     item_list.append(
         {
             "ID": row["id"],
+            "企業コード": row["company_code"],
+            "企業名": row["company_name"],
             "案件名": row["project_name"],
             "商品コード": row["code"],
             "商品名": row["name"],
