@@ -403,51 +403,21 @@ def make_label_png(item):
 
     item_text = f"商品名：{item_name}"
 
-    item_font = fit_text(
-        draw,
-        item_text,
-        font_path,
-        usable_width,
-        34,
-        22
-    )
+    item_font = ImageFont.truetype(font_path, 26) if font_path else ImageFont.load_default()
 
-    # 1行目に収まるか確認
-    bbox = draw.textbbox((0, 0), item_text, font=item_font)
-    text_width = bbox[2] - bbox[0]
+    max_chars = 18
 
-    if text_width <= usable_width:
-        draw.text(
-            (margin, y),
-            item_text,
-            fill="black",
-            font=item_font
-        )
-        y += 42
+    if len(item_text) > max_chars:
+        line1 = item_text[:max_chars]
+        line2 = item_text[max_chars:max_chars * 2]
 
+        draw.text((margin, y), line1, fill="black", font=item_font)
+        y += 34
+
+        draw.text((margin, y), line2, fill="black", font=item_font)
+        y += 34
     else:
-        # 2行に分割
-        split_pos = len(item_text) // 2
-
-        line1 = item_text[:split_pos]
-        line2 = item_text[split_pos:]
-
-        draw.text(
-            (margin, y),
-            line1,
-            fill="black",
-            font=item_font
-        )
-
-        y += 38
-
-        draw.text(
-            (margin, y),
-            line2,
-            fill="black",
-            font=item_font
-        )
-
+        draw.text((margin, y), item_text, fill="black", font=item_font)
         y += 38
 
     # =========================
