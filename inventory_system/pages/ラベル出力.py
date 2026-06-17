@@ -601,14 +601,27 @@ try:
             i.id AS item_id,
             i.code AS item_code,
             i.name AS item_name,
+
             p.code AS project_code,
             p.name AS project_name,
-            p.shipping_date AS shipping_date
-            FROM items i
-            JOIN projects p
+            p.shipping_date AS shipping_date,
+
+            c.code AS company_code,
+            c.name AS company_name
+
+        FROM items i
+
+        JOIN projects p
             ON i.project_id = p.id
-            WHERE i.project_id = {ph}
-            ORDER BY i.name
+
+        LEFT JOIN project_companies pc
+            ON p.id = pc.project_id
+
+        LEFT JOIN companies c
+            ON pc.company_id = c.id
+
+        WHERE i.project_id = {ph}
+        ORDER BY i.name
         """,
         [selected_project_id]
     )
