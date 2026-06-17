@@ -1,7 +1,8 @@
 streamlit
 pandas
 python-barcode
-pillow
+Pillow
 reportlab
 psycopg[binary]
 openpyxl
+brother_ql
