@@ -18,33 +18,29 @@ st.success(
 )
 
 
-# =====================
-# 商品コード自動採番
-# 企業コード4桁-年月4桁-連番4桁
-# 例：1001-2606-0007
-# =====================
-
 def generate_item_code(conn, project_id):
     project = conn.execute(
         """
-        SELECT
-            projects.id,
-            projects.code AS project_code,
-            companies.code AS company_code
+        SELECT code
         FROM projects
-        LEFT JOIN companies
-            ON projects.company_id = companies.id
-        WHERE projects.id = ?
+        WHERE id = ?
         """,
         (project_id,)
     ).fetchone()
 
     ym = datetime.now().strftime("%y%m")
 
-    if project and project["company_code"]:
-        company_code = str(project["company_code"]).strip()
+    if project and project["code"]:
+        base_code = str(project["code"]).strip()
     else:
-        company_code = "0000"
+        base_code = "0000"
+
+    company_code = (
+        base_code
+        .replace("-", "")
+        [:4]
+        .zfill(4)
+    )
 
     prefix = f"{company_code}-{ym}"
 
@@ -60,8 +56,10 @@ def generate_item_code(conn, project_id):
     ).fetchone()
 
     if row:
-        last_number = int(str(row["code"]).split("-")[-1])
-        next_number = last_number + 1
+        try:
+            next_number = int(str(row["code"]).split("-")[-1]) + 1
+        except Exception:
+            next_number = 1
     else:
         next_number = 1
 
@@ -71,10 +69,7 @@ def generate_item_code(conn, project_id):
 def create_barcode(project_code, item_code):
     barcode_data = f"{project_code}_{item_code}"
 
-    os.makedirs(
-        "barcodes/project_items",
-        exist_ok=True
-    )
+    os.makedirs("barcodes/project_items", exist_ok=True)
 
     barcode_class = barcode.get_barcode_class("code128")
 
@@ -83,16 +78,10 @@ def create_barcode(project_code, item_code):
         writer=ImageWriter()
     )
 
-    barcode_obj.save(
-        f"barcodes/project_items/{barcode_data}"
-    )
+    barcode_obj.save(f"barcodes/project_items/{barcode_data}")
 
     return barcode_data
 
-
-# =====================
-# 案件一覧取得
-# =====================
 
 projects = conn.execute(
     """
@@ -121,19 +110,9 @@ project_id = project_options[selected_project]
 
 preview_code = generate_item_code(conn, project_id)
 
-st.info(
-    f"次に発行される商品コード：{preview_code}"
-)
+st.info(f"次に発行される商品コード：{preview_code}")
 
-
-# =====================
-# 商品登録
-# =====================
-
-name = st.text_input(
-    "商品名",
-    key="new_item_name"
-)
+name = st.text_input("商品名", key="new_item_name")
 
 required_quantity = st.number_input(
     "商品小口数",
@@ -145,11 +124,9 @@ required_quantity = st.number_input(
 if st.button("商品登録"):
 
     if not name.strip():
-
         st.warning("商品名を入力してください")
 
     else:
-
         code = generate_item_code(conn, project_id)
 
         exists = conn.execute(
@@ -162,9 +139,7 @@ if st.button("商品登録"):
         ).fetchone()
 
         if exists:
-            st.error(
-                "商品コードが重複しました。もう一度登録ボタンを押してください。"
-            )
+            st.error("商品コードが重複しました。もう一度登録ボタンを押してください。")
             st.stop()
 
         cursor = conn.execute(
@@ -206,18 +181,10 @@ if st.button("商品登録"):
             (project_id,)
         ).fetchone()
 
-        project_code = project_row["code"]
+        create_barcode(project_row["code"], code)
 
-        create_barcode(project_code, code)
+        st.success(f"商品登録完了：{code} / {name.strip()}")
 
-        st.success(
-            f"商品登録完了：{code} / {name.strip()}"
-        )
-
-
-# =====================
-# CSV一括登録
-# =====================
 
 st.subheader("CSVで商品一括登録")
 
@@ -228,22 +195,12 @@ st.info(
 
 sample_df = pd.DataFrame(
     [
-        {
-            "商品コード": "",
-            "商品名": "Falcon ダイニングチェア",
-            "商品小口数": 4
-        },
-        {
-            "商品コード": "",
-            "商品名": "Tsubomi テーブル",
-            "商品小口数": 1
-        }
+        {"商品コード": "", "商品名": "Falcon ダイニングチェア", "商品小口数": 4},
+        {"商品コード": "", "商品名": "Tsubomi テーブル", "商品小口数": 1},
     ]
 )
 
-sample_csv = sample_df.to_csv(
-    index=False
-).encode("cp932", errors="ignore")
+sample_csv = sample_df.to_csv(index=False).encode("cp932", errors="ignore")
 
 st.download_button(
     label="サンプルCSVをダウンロード",
@@ -262,20 +219,11 @@ if uploaded_file is not None:
     csv_bytes = uploaded_file.getvalue()
 
     try:
-        df_upload = pd.read_csv(
-            BytesIO(csv_bytes),
-            encoding="cp932"
-        )
+        df_upload = pd.read_csv(BytesIO(csv_bytes), encoding="cp932")
     except UnicodeDecodeError:
-        df_upload = pd.read_csv(
-            BytesIO(csv_bytes),
-            encoding="utf-8-sig"
-        )
+        df_upload = pd.read_csv(BytesIO(csv_bytes), encoding="utf-8-sig")
 
-    df_upload.columns = [
-        str(col).strip()
-        for col in df_upload.columns
-    ]
+    df_upload.columns = [str(col).strip() for col in df_upload.columns]
 
     if "商品コード" not in df_upload.columns:
         df_upload["商品コード"] = ""
@@ -283,57 +231,27 @@ if uploaded_file is not None:
     if "商品小口数" not in df_upload.columns:
         df_upload["商品小口数"] = 1
 
-    required_columns = [
-        "商品名"
-    ]
-
-    missing_columns = [
-        col
-        for col in required_columns
-        if col not in df_upload.columns
-    ]
-
-    if missing_columns:
-
-        st.error(
-            f"CSVに必要な列がありません: {', '.join(missing_columns)}"
-        )
+    if "商品名" not in df_upload.columns:
+        st.error("CSVに必要な列がありません: 商品名")
 
     else:
-
         df_upload = df_upload[
             ["商品コード", "商品名", "商品小口数"]
         ].fillna("")
 
-        df_upload["商品コード"] = (
-            df_upload["商品コード"]
-            .astype(str)
-            .str.strip()
-        )
-
-        df_upload["商品名"] = (
-            df_upload["商品名"]
-            .astype(str)
-            .str.strip()
-        )
+        df_upload["商品コード"] = df_upload["商品コード"].astype(str).str.strip()
+        df_upload["商品名"] = df_upload["商品名"].astype(str).str.strip()
 
         df_upload["商品小口数"] = pd.to_numeric(
             df_upload["商品小口数"],
             errors="coerce"
         ).fillna(1).astype(int)
 
-        df_upload.loc[
-            df_upload["商品小口数"] < 1,
-            "商品小口数"
-        ] = 1
+        df_upload.loc[df_upload["商品小口数"] < 1, "商品小口数"] = 1
 
-        df_upload = df_upload[
-            df_upload["商品名"] != ""
-        ]
+        df_upload = df_upload[df_upload["商品名"] != ""]
 
-        st.write(
-            f"読み込み件数：{len(df_upload)}件"
-        )
+        st.write(f"読み込み件数：{len(df_upload)}件")
 
         st.dataframe(
             df_upload,
@@ -378,11 +296,7 @@ if uploaded_file is not None:
                 ).fetchone()
 
                 if exists:
-
-                    skipped_items.append(
-                        f"{item_code} / {item_name}"
-                    )
-
+                    skipped_items.append(f"{item_code} / {item_name}")
                     continue
 
                 cursor = conn.execute(
@@ -429,46 +343,26 @@ if uploaded_file is not None:
                 f"登録: {created_count}件 / スキップ: {len(skipped_items)}件"
             )
 
-            st.success(
-                f"CSV一括登録完了：{created_count}件"
-            )
+            st.success(f"CSV一括登録完了：{created_count}件")
 
             if skipped_items:
-
-                st.warning(
-                    f"重複のためスキップ：{len(skipped_items)}件"
-                )
-
+                st.warning(f"重複のためスキップ：{len(skipped_items)}件")
                 st.write(skipped_items)
 
 
-# =====================
-# 商品一覧
-# =====================
-
 sort_option = st.selectbox(
     "並び順",
-    [
-        "ID順",
-        "商品コード順",
-        "商品名順"
-    ]
+    ["ID順", "商品コード順", "商品名順"]
 )
 
 order_by = "items.id"
 
 if sort_option == "商品コード順":
     order_by = "items.code"
-
 elif sort_option == "商品名順":
     order_by = "items.name"
 
 st.subheader("商品一覧")
-
-
-# =====================
-# シール印刷用CSV出力
-# =====================
 
 st.subheader("シール印刷用CSV出力")
 
@@ -503,10 +397,7 @@ label_query += """
 ORDER BY projects.name, items.code
 """
 
-label_rows = conn.execute(
-    label_query,
-    label_params
-).fetchall()
+label_rows = conn.execute(label_query, label_params).fetchall()
 
 label_list = []
 
@@ -515,7 +406,6 @@ for row in label_rows:
     qty = int(row["商品小口数"])
 
     for _ in range(qty):
-
         label_list.append(
             {
                 "商品コード": row["商品コード"],
@@ -529,17 +419,11 @@ for row in label_rows:
 df_labels = pd.DataFrame(label_list)
 
 if label_project == "すべて":
-    st.info(
-        f"CSV出力対象：全案件 / {len(df_labels)}件"
-    )
+    st.info(f"CSV出力対象：全案件 / {len(df_labels)}件")
 else:
-    st.info(
-        f"CSV出力対象：{label_project} / {len(df_labels)}件"
-    )
+    st.info(f"CSV出力対象：{label_project} / {len(df_labels)}件")
 
-csv = df_labels.to_csv(
-    index=False
-).encode("cp932", errors="ignore")
+csv = df_labels.to_csv(index=False).encode("cp932", errors="ignore")
 
 st.download_button(
     label="シール印刷用CSVを出力",
@@ -553,13 +437,7 @@ if df_labels.empty:
     st.info("出力できる商品がありません")
 
 
-# =====================
-# 検索
-# =====================
-
-search_text = st.text_input(
-    "商品検索"
-)
+search_text = st.text_input("商品検索")
 
 query = """
 SELECT
@@ -579,7 +457,6 @@ WHERE
 params = []
 
 if search_text:
-
     query += """
     AND (
         items.code LIKE ?
@@ -596,15 +473,11 @@ query += f"""
 ORDER BY {order_by}
 """
 
-rows = conn.execute(
-    query,
-    params
-).fetchall()
+rows = conn.execute(query, params).fetchall()
 
 item_list = []
 
 for row in rows:
-
     item_list.append(
         {
             "ID": row["id"],
