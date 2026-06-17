@@ -378,6 +378,11 @@ def home_page():
                     "page": "pages/08_shipping_instruction.py",
                     "label": "📄 出荷指示書"
                 },
+                {
+                    "page": "pages/11_label_print.py",
+                    "label": "🏷️ ラベル出力"
+                },
+                
             ]
         )
 
@@ -400,10 +405,6 @@ def home_page():
                 {
                     "page": "pages/10_admin.py",
                     "label": "⚙️ 管理ページ"
-                },
-                {
-                    "page": "pages/11_label_print.py",
-                    "label": "🏷️ ラベル出力"
                 },
             ]
         )
