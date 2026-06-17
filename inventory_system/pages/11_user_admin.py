@@ -7,7 +7,9 @@ check_admin()
 conn = get_connection()
 
 st.title("👤 ユーザー管理")
-st.success(f"ログイン中：{st.session_state.username}")
+st.success(
+    f"ログイン中：{st.session_state.get('display_name', st.session_state.username)}"
+)
 
 tabs = st.tabs([
     "ユーザー一覧",

@@ -8,7 +8,7 @@ conn = get_connection()
 
 st.title("🧾 操作履歴")
 st.success(
-    f"ログイン中：{st.session_state.username}"
+    f"ログイン中：{st.session_state.get('display_name', st.session_state.username)}"
 )
 
 rows = conn.execute(

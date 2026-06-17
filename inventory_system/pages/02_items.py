@@ -14,7 +14,7 @@ conn = get_connection()
 
 st.title("商品管理")
 st.success(
-    f"ログイン中：{st.session_state.username}"
+    f"ログイン中：{st.session_state.get('display_name', st.session_state.username)}"
 )
 
 # 案件一覧取得

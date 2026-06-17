@@ -9,7 +9,7 @@ conn = get_connection()
 
 st.title("⚙️ 管理ページ")
 st.success(
-    f"ログイン中：{st.session_state.username}"
+    f"ログイン中：{st.session_state.get('display_name', st.session_state.username)}"
 )
 
 tabs = st.tabs(

@@ -30,7 +30,9 @@ login_name = st.session_state.get(
     st.session_state.username
 )
 
-st.success(f"ログイン中：{login_name}")
+st.success(
+    f"ログイン中：{st.session_state.get('display_name', st.session_state.username)}"
+)
 
 BASE_DIR = os.path.dirname(os.path.dirname(__file__))
 
