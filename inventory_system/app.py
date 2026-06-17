@@ -443,12 +443,13 @@ pages = [
 if st.session_state.role == "admin":
 
     pages.extend(
-        pages = [
-            st.Page(home_page, title="ホーム", icon="🏠"),
-            st.Page("pages/03_stock.py", title="入出庫登録", icon="📥"),
-            st.Page("pages/04_stock_list.py", title="在庫一覧", icon="📊"),
-            st.Page("pages/07_item_search.py", title="商品検索", icon="🔍"),
-            st.Page("pages/08_shipping_instruction.py", title="出荷指示書", icon="📄"),
+        [
+            st.Page("pages/01_projects.py", title="案件管理", icon="📁"),
+            st.Page("pages/02_items.py", title="商品管理", icon="📦"),
+            st.Page("pages/05_history.py", title="入出庫履歴", icon="📝"),
+            st.Page("pages/06_inventory_check.py", title="棚卸", icon="🧮"),
+            st.Page("pages/09_operation_logs.py", title="操作履歴", icon="🧾"),
+            st.Page("pages/10_admin.py", title="管理ページ", icon="⚙️"),
             st.Page("pages/99_manual.py", title="ヘルプ", icon="❓"),
         ]
     )
