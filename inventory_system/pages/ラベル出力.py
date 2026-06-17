@@ -386,26 +386,58 @@ def make_label_png(item):
     )
 
     # =========================
-    # 商品名
+    # 商品名 2行表示
     # =========================
     y += 14
 
     item_text = f"商品名：{item_name}"
+
     item_font = fit_text(
         draw,
         item_text,
         font_path,
         usable_width,
-        42,
-        26
+        34,
+        22
     )
 
-    draw.text(
-        (margin, y),
-        item_text,
-        fill="black",
-        font=item_font
-    )
+    # 1行目に収まるか確認
+    bbox = draw.textbbox((0, 0), item_text, font=item_font)
+    text_width = bbox[2] - bbox[0]
+
+    if text_width <= usable_width:
+        draw.text(
+            (margin, y),
+            item_text,
+            fill="black",
+            font=item_font
+        )
+        y += 42
+
+    else:
+        # 2行に分割
+        split_pos = len(item_text) // 2
+
+        line1 = item_text[:split_pos]
+        line2 = item_text[split_pos:]
+
+        draw.text(
+            (margin, y),
+            line1,
+            fill="black",
+            font=item_font
+        )
+
+        y += 38
+
+        draw.text(
+            (margin, y),
+            line2,
+            fill="black",
+            font=item_font
+        )
+
+        y += 38
 
     # =========================
     # 企業名
@@ -588,7 +620,7 @@ try:
         st.stop()
 
     project_options = {
-        f"{p.get('name', '')} / {p.get('code', '')}": p["id"]
+        f"{p.get('company_code') or '企業未設定'}：{p.get('name', '')} / {p.get('code', '')}": p["id"]
         for p in projects
     }
 
