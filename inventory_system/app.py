@@ -5,34 +5,15 @@ import shutil
 import time
 from datetime import datetime
 
-# =====================
-# ページ設定
-# =====================
-
 st.set_page_config(
     page_title="大阪陸運 | SHARK",
     layout="wide"
 )
 
-# =====================
-# パス設定
-# =====================
-
 BASE_DIR = os.path.dirname(__file__)
 
-logo_path = os.path.join(
-    BASE_DIR,
-    "20260608-logo.png"
-)
-
-boot_logo_path = os.path.join(
-    BASE_DIR,
-    "assets",
-    "shark_01.jpg"
-)
-# =====================
-# セッション初期化
-# =====================
+logo_path = os.path.join(BASE_DIR, "20260608-logo.png")
+boot_logo_path = os.path.join(BASE_DIR, "assets", "shark_01.jpg")
 
 if "login" not in st.session_state:
     st.session_state.login = False
@@ -42,6 +23,10 @@ if "role" not in st.session_state:
 
 if "username" not in st.session_state:
     st.session_state.username = None
+
+if "display_name" not in st.session_state:
+    st.session_state.display_name = None
+
 
 # =====================
 # SHARK 起動演出
@@ -80,23 +65,15 @@ if not st.session_state.shark_boot_done:
         progress.progress(int((i + 1) / len(boot_messages) * 100))
         time.sleep(0.4)
 
-    # 100%になった後に少し見せる
     time.sleep(0.4)
-
-    # 進捗表示を消す
     progress.empty()
     status.empty()
 
-    # ロゴ表示
     if os.path.exists(boot_logo_path):
         col1, col2, col3 = st.columns([1, 2, 1])
         with col2:
-            st.image(
-                boot_logo_path,
-                use_container_width=True
-            )
+            st.image(boot_logo_path, use_container_width=True)
 
-    # ロゴを長めに見せる
     time.sleep(2.5)
 
     st.markdown(
@@ -109,9 +86,9 @@ if not st.session_state.shark_boot_done:
     )
 
     time.sleep(0.8)
-
     st.session_state.shark_boot_done = True
     st.rerun()
+
 
 # =====================
 # ログイン画面
@@ -122,11 +99,7 @@ if not st.session_state.login:
     st.title("🔐 ログイン")
 
     username = st.text_input("ユーザー名")
-
-    password = st.text_input(
-        "パスワード",
-        type="password"
-    )
+    password = st.text_input("パスワード", type="password")
 
     if st.button("ログイン"):
 
@@ -171,359 +144,315 @@ if not st.session_state.login:
             st.rerun()
 
         else:
-
             conn.close()
             st.error("ユーザー名またはパスワードが違います")
 
     st.stop()
-# =====================
-# ログイン後ここから
-# =====================
-
-conn = get_connection()
-
-# =====================
-# CSS
-# =====================
-
-st.markdown(
-    """
-    <style>
-    div[data-testid="stPageLink"] a {
-        border: 1px solid #dddddd;
-        border-radius: 14px;
-        padding: 14px 18px;
-        margin: 8px 0;
-        background-color: #ffffff;
-        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
-        text-align: center;
-        font-weight: 700;
-        font-size: 17px;
-        transition: 0.2s ease;
-        min-height: 56px;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-    }
-
-    div[data-testid="stPageLink"] a:hover {
-        background-color: #f5f7fa;
-        border-color: #999999;
-        transform: translateY(-2px);
-    }
-
-    .help-button {
-        position: fixed;
-        top: 90px;
-        right: 80px;
-        z-index: 9999;
-        background-color: #ffffff;
-        border: 1px solid #dddddd;
-        border-radius: 14px;
-        padding: 12px 18px;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.12);
-        font-weight: 700;
-        font-size: 16px;
-        text-decoration: none;
-        color: #222222;
-    }
-
-    .help-button:hover {
-        background-color: #f5f7fa;
-        border-color: #999999;
-    }
-
-    .menu-title {
-        font-size: 34px;
-        font-weight: 800;
-        margin-top: 20px;
-        margin-bottom: 14px;
-    }
-
-    .system-subtitle {
-        text-align: center;
-        color: #555555;
-        font-size: 20px;
-        font-weight: 600;
-        letter-spacing: 1px;
-        margin-top: 4px;
-        margin-bottom: 20px;
-    }
-    </style>
-    """,
-    unsafe_allow_html=True
-)
 
 
 # =====================
-# TOPタイトル
+# ホーム画面
 # =====================
 
-if os.path.exists(logo_path):
+def home_page():
 
-    header_left, header_right = st.columns([8, 1])
-
-    with header_right:
-        st.page_link(
-            "pages/99_manual.py",
-            label="❓ ヘルプ"
-        )
-
-    col1, col2, col3 = st.columns([1, 3, 1])
-
-    with col2:
-        st.image(
-            logo_path,
-            use_container_width=True
-        )
-
-else:
+    conn = get_connection()
 
     st.markdown(
         """
-        <h1 style='text-align: center; font-size: 52px; margin-top: 20px;'>
-            大阪陸運
-        </h1>
+        <style>
+        div[data-testid="stPageLink"] a {
+            border: 1px solid #dddddd;
+            border-radius: 14px;
+            padding: 14px 18px;
+            margin: 8px 0;
+            background-color: #ffffff;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+            text-align: center;
+            font-weight: 700;
+            font-size: 17px;
+            transition: 0.2s ease;
+            min-height: 56px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        div[data-testid="stPageLink"] a:hover {
+            background-color: #f5f7fa;
+            border-color: #999999;
+            transform: translateY(-2px);
+        }
+
+        .menu-title {
+            font-size: 34px;
+            font-weight: 800;
+            margin-top: 20px;
+            margin-bottom: 14px;
+        }
+
+        .system-subtitle {
+            text-align: center;
+            color: #555555;
+            font-size: 20px;
+            font-weight: 600;
+            letter-spacing: 1px;
+            margin-top: 4px;
+            margin-bottom: 20px;
+        }
+        </style>
         """,
         unsafe_allow_html=True
     )
 
-    st.warning(
-        "ロゴ画像が見つかりません。inventory_system/20260608-logo.png を配置してください。"
-    )
+    if os.path.exists(logo_path):
 
-st.markdown(
-    """
-    <p class="system-subtitle">
-        Smart Handling All Resource Keeper System
-    </p>
-    """,
-    unsafe_allow_html=True
-)
+        header_left, header_right = st.columns([8, 1])
 
-st.write("---")
-
-# =====================
-# DBバックアップ
-# クラウド版ではSQLiteバックアップ不可なのでローカル時だけ表示
-# =====================
-
-database_url = os.environ.get("DATABASE_URL")
-
-try:
-    if "DATABASE_URL" in st.secrets:
-        database_url = st.secrets["DATABASE_URL"]
-except Exception:
-    pass
-
-if not database_url:
-
-    if st.button("💾 DBバックアップ"):
-
-        db_path = os.path.join(
-            BASE_DIR,
-            "data",
-            "inventory.db"
-        )
-
-        backup_name = (
-            f"backup_"
-            f"{datetime.now().strftime('%Y%m%d_%H%M%S')}.db"
-        )
-
-        shutil.copy(
-            db_path,
-            backup_name
-        )
-
-        st.success(
-            f"バックアップ作成完了: {backup_name}"
-        )
-
-else:
-
-    st.info(
-        "クラウドDB接続中：データはSupabaseに保存されています。"
-    )
-
-st.write("---")
-
-# =====================
-# 件数取得
-# =====================
-
-project_count = conn.execute(
-    """
-    SELECT COUNT(*)
-    FROM projects
-    """
-).fetchone()[0]
-
-item_count = conn.execute(
-    """
-    SELECT COUNT(*)
-    FROM items
-    """
-).fetchone()[0]
-
-log_count = conn.execute(
-    """
-    SELECT COUNT(*)
-    FROM stock_logs
-    """
-).fetchone()[0]
-
-# =====================
-# 件数表示
-# =====================
-
-col1, col2, col3 = st.columns(3)
-
-with col1:
-
-    st.metric(
-        "案件数",
-        project_count
-    )
-
-with col2:
-
-    st.metric(
-        "商品数",
-        item_count
-    )
-
-with col3:
-
-    st.metric(
-        "入出庫履歴",
-        log_count
-    )
-
-st.write("---")
-
-# =====================
-# システムメニュー
-# =====================
-
-st.markdown(
-    '<div class="menu-title">📋 システムメニュー</div>',
-    unsafe_allow_html=True
-)
-
-# ログアウトボタン
-logout_col1, logout_col2 = st.columns([8, 1])
-
-with logout_col2:
-
-    if st.button("🚪ログアウト"):
-
-        st.session_state.login = False
-        st.session_state.role = None
-        st.session_state.username = None
-
-        st.rerun()
-
-# =====================
-# メニュー定義
-# =====================
-
-menu_items = []
-
-# 管理者だけ表示
-if st.session_state.role == "admin":
-
-    menu_items.extend(
-        [
-            {
-                "page": "pages/01_projects.py",
-                "label": "📁 案件管理"
-            },
-            {
-                "page": "pages/02_items.py",
-                "label": "📦 商品管理"
-            },
-        ]
-    )
-
-# 入出庫・ラベル用アカウント
-if st.session_state.role in ["admin", "warehouse", "label_user"]:
-    menu_items.extend(
-        [
-            {
-                "page": "pages/03_stock.py",
-                "label": "📥📤 入出庫登録"
-            },
-            {
-                "page": "pages/04_stock_list.py",
-                "label": "📊 在庫一覧"
-            },
-            {
-                "page": "pages/07_item_search.py",
-                "label": "🔍 商品検索"
-            },
-            {
-                "page": "pages/08_shipping_instruction.py",
-                "label": "📄 出荷指示書"
-            },
-        ]
-    )
-
-# adminだけ履歴・棚卸も表示
-if st.session_state.role == "admin":
-    menu_items.extend(
-        [
-            {
-                "page": "pages/05_history.py",
-                "label": "📝 入出庫履歴"
-            },
-            {
-                "page": "pages/06_inventory_check.py",
-                "label": "🧮 棚卸"
-            },
-        ]
-    )
-
-# 管理者だけ表示
-if st.session_state.role == "admin":
-
-    menu_items.extend(
-        [
-            {
-                "page": "pages/09_operation_logs.py",
-                "label": "🧾 操作履歴"
-            },
-            {
-                "page": "pages/10_admin.py",
-                "label": "⚙️ 管理ページ"
-            },
-        ]
-    )
-
-    
-# =====================
-# 3列で均等表示
-# =====================
-
-for i in range(0, len(menu_items), 3):
-
-    cols = st.columns(3)
-
-    row_items = menu_items[
-        i:i + 3
-    ]
-
-    for col, item in zip(cols, row_items):
-
-        with col:
-
+        with header_right:
             st.page_link(
-                item["page"],
-                label=item["label"]
+                "pages/99_manual.py",
+                label="❓ ヘルプ"
             )
 
-st.write("---")
+        col1, col2, col3 = st.columns([1, 3, 1])
 
-st.caption(
-    "大阪陸運 八尾倉庫 在庫管理システム Ver 1.101"
-)
+        with col2:
+            st.image(
+                logo_path,
+                use_container_width=True
+            )
+
+    else:
+
+        st.markdown(
+            """
+            <h1 style='text-align: center; font-size: 52px; margin-top: 20px;'>
+                大阪陸運
+            </h1>
+            """,
+            unsafe_allow_html=True
+        )
+
+        st.warning(
+            "ロゴ画像が見つかりません。inventory_system/20260608-logo.png を配置してください。"
+        )
+
+    st.markdown(
+        """
+        <p class="system-subtitle">
+            Smart Handling All Resource Keeper System
+        </p>
+        """,
+        unsafe_allow_html=True
+    )
+
+    st.write("---")
+
+    database_url = os.environ.get("DATABASE_URL")
+
+    try:
+        if "DATABASE_URL" in st.secrets:
+            database_url = st.secrets["DATABASE_URL"]
+    except Exception:
+        pass
+
+    if not database_url:
+
+        if st.button("💾 DBバックアップ"):
+
+            db_path = os.path.join(
+                BASE_DIR,
+                "data",
+                "inventory.db"
+            )
+
+            backup_name = (
+                f"backup_"
+                f"{datetime.now().strftime('%Y%m%d_%H%M%S')}.db"
+            )
+
+            shutil.copy(
+                db_path,
+                backup_name
+            )
+
+            st.success(
+                f"バックアップ作成完了: {backup_name}"
+            )
+
+    else:
+
+        st.info(
+            "クラウドDB接続中：データはSupabaseに保存されています。"
+        )
+
+    st.write("---")
+
+    project_count = conn.execute(
+        """
+        SELECT COUNT(*)
+        FROM projects
+        """
+    ).fetchone()[0]
+
+    item_count = conn.execute(
+        """
+        SELECT COUNT(*)
+        FROM items
+        """
+    ).fetchone()[0]
+
+    log_count = conn.execute(
+        """
+        SELECT COUNT(*)
+        FROM stock_logs
+        """
+    ).fetchone()[0]
+
+    col1, col2, col3 = st.columns(3)
+
+    with col1:
+        st.metric("案件数", project_count)
+
+    with col2:
+        st.metric("商品数", item_count)
+
+    with col3:
+        st.metric("入出庫履歴", log_count)
+
+    st.write("---")
+
+    st.markdown(
+        '<div class="menu-title">📋 システムメニュー</div>',
+        unsafe_allow_html=True
+    )
+
+    logout_col1, logout_col2 = st.columns([8, 1])
+
+    with logout_col2:
+
+        if st.button("🚪ログアウト"):
+
+            st.session_state.login = False
+            st.session_state.role = None
+            st.session_state.username = None
+            st.session_state.display_name = None
+
+            st.rerun()
+
+    menu_items = []
+
+    if st.session_state.role == "admin":
+
+        menu_items.extend(
+            [
+                {
+                    "page": "pages/01_projects.py",
+                    "label": "📁 案件管理"
+                },
+                {
+                    "page": "pages/02_items.py",
+                    "label": "📦 商品管理"
+                },
+            ]
+        )
+
+    if st.session_state.role in ["admin", "user", "warehouse", "label_user"]:
+
+        menu_items.extend(
+            [
+                {
+                    "page": "pages/03_stock.py",
+                    "label": "📥📤 入出庫登録"
+                },
+                {
+                    "page": "pages/04_stock_list.py",
+                    "label": "📊 在庫一覧"
+                },
+                {
+                    "page": "pages/07_item_search.py",
+                    "label": "🔍 商品検索"
+                },
+                {
+                    "page": "pages/08_shipping_instruction.py",
+                    "label": "📄 出荷指示書"
+                },
+            ]
+        )
+
+    if st.session_state.role == "admin":
+
+        menu_items.extend(
+            [
+                {
+                    "page": "pages/05_history.py",
+                    "label": "📝 入出庫履歴"
+                },
+                {
+                    "page": "pages/06_inventory_check.py",
+                    "label": "🧮 棚卸"
+                },
+                {
+                    "page": "pages/09_operation_logs.py",
+                    "label": "🧾 操作履歴"
+                },
+                {
+                    "page": "pages/10_admin.py",
+                    "label": "⚙️ 管理ページ"
+                },
+            ]
+        )
+
+    for i in range(0, len(menu_items), 3):
+
+        cols = st.columns(3)
+
+        row_items = menu_items[i:i + 3]
+
+        for col, item in zip(cols, row_items):
+
+            with col:
+
+                st.page_link(
+                    item["page"],
+                    label=item["label"]
+                )
+
+    st.write("---")
+
+    st.caption(
+        "大阪陸運 八尾倉庫 在庫管理システム Ver 1.101"
+    )
+
+    conn.close()
+
+
+# =====================
+# サイドバー表示制御
+# =====================
+
+pages = [
+    st.Page(home_page, title="ホーム", icon="🏠"),
+    st.Page("pages/03_stock.py", title="入出庫登録", icon="📥"),
+    st.Page("pages/04_stock_list.py", title="在庫一覧", icon="📊"),
+    st.Page("pages/07_item_search.py", title="商品検索", icon="🔍"),
+    st.Page("pages/08_shipping_instruction.py", title="出荷指示書", icon="📄"),
+]
+
+if st.session_state.role == "admin":
+
+    pages.extend(
+        [
+            st.Page("pages/01_projects.py", title="案件管理", icon="📁"),
+            st.Page("pages/02_items.py", title="商品管理", icon="📦"),
+            st.Page("pages/05_history.py", title="入出庫履歴", icon="📝"),
+            st.Page("pages/06_inventory_check.py", title="棚卸", icon="🧮"),
+            st.Page("pages/09_operation_logs.py", title="操作履歴", icon="🧾"),
+            st.Page("pages/10_admin.py", title="管理ページ", icon="⚙️"),
+            st.Page("pages/99_manual.py", title="ヘルプ", icon="❓"),
+        ]
+    )
+
+pg = st.navigation(pages)
+pg.run()
