@@ -379,7 +379,7 @@ def home_page():
                     "label": "📄 出荷指示書"
                 },
                 {
-                    "page": "pages/11_label_print.py",
+                    "page": "pages/ラベル出力.py",
                     "label": "🏷️ ラベル出力"
                 },
                 
@@ -443,7 +443,7 @@ pages = [
     st.Page("pages/04_stock_list.py", title="在庫一覧", icon="📊"),
     st.Page("pages/07_item_search.py", title="商品検索", icon="🔍"),
     st.Page("pages/08_shipping_instruction.py", title="出荷指示書", icon="📄"),
-    st.Page("pages/11_label_print.py", title="ラベル出力", icon="🏷️"),
+    st.Page("pages/ラベル出力.py", title="ラベル出力", icon="🏷️"),
     st.Page("pages/99_manual.py", title="ヘルプ", icon="❓"),
 ]
 
