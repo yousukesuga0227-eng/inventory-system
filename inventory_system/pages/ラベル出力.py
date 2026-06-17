@@ -478,7 +478,7 @@ def make_label_png(item):
         barcode_img = make_barcode_png(item_code)
 
         # 幅を少し狭める
-        target_w = width_px - 160
+        target_w = width_px - 60
         ratio = target_w / barcode_img.width
         target_h = int(barcode_img.height * ratio)
 
