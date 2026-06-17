@@ -230,7 +230,7 @@ with tabs[1]:
             )
             
             new_required_quantity = st.number_input(
-                "商品小口数",
+                "出荷数",
                 min_value=1,
                 value=int(item["required_quantity"])
             )

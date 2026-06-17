@@ -128,7 +128,7 @@ st.info(f"次に発行される商品コード：{preview_code}")
 name = st.text_input("商品名", key="new_item_name")
 
 required_quantity = st.number_input(
-    "商品小口数",
+    "出荷数",
     min_value=1,
     value=1,
     step=1
@@ -202,14 +202,14 @@ if st.button("商品登録"):
 st.subheader("CSVで商品一括登録")
 
 st.info(
-    "CSVの列名は「商品名」「商品小口数」にしてください。"
+    "CSVの列名は「商品名」「出荷数」にしてください。"
     "「商品コード」列がある場合はそのコードを使用、空欄なら自動採番します。"
 )
 
 sample_df = pd.DataFrame(
     [
-        {"商品コード": "", "商品名": "Falcon ダイニングチェア", "商品小口数": 4},
-        {"商品コード": "", "商品名": "Tsubomi テーブル", "商品小口数": 1},
+        {"商品コード": "", "商品名": "Falcon ダイニングチェア", "出荷数": 4},
+        {"商品コード": "", "商品名": "Tsubomi テーブル", "出荷数": 1},
     ]
 )
 
@@ -241,26 +241,26 @@ if uploaded_file is not None:
     if "商品コード" not in df_upload.columns:
         df_upload["商品コード"] = ""
 
-    if "商品小口数" not in df_upload.columns:
-        df_upload["商品小口数"] = 1
+    if "出荷数" not in df_upload.columns:
+        df_upload["出荷数"] = 1
 
     if "商品名" not in df_upload.columns:
         st.error("CSVに必要な列がありません: 商品名")
 
     else:
         df_upload = df_upload[
-            ["商品コード", "商品名", "商品小口数"]
+            ["商品コード", "商品名", "出荷数"]
         ].fillna("")
 
         df_upload["商品コード"] = df_upload["商品コード"].astype(str).str.strip()
         df_upload["商品名"] = df_upload["商品名"].astype(str).str.strip()
 
-        df_upload["商品小口数"] = pd.to_numeric(
-            df_upload["商品小口数"],
+        df_upload["出荷数"] = pd.to_numeric(
+            df_upload["出荷数"],
             errors="coerce"
         ).fillna(1).astype(int)
 
-        df_upload.loc[df_upload["商品小口数"] < 1, "商品小口数"] = 1
+        df_upload.loc[df_upload["出荷数"] < 1, "出荷数"] = 1
         df_upload = df_upload[df_upload["商品名"] != ""]
 
         st.write(f"読み込み件数：{len(df_upload)}件")
@@ -291,7 +291,7 @@ if uploaded_file is not None:
 
                 csv_code = str(row["商品コード"]).strip()
                 item_name = str(row["商品名"]).strip()
-                item_required_quantity = int(row["商品小口数"])
+                item_required_quantity = int(row["出荷数"])
 
                 if csv_code:
                     item_code = csv_code
@@ -392,7 +392,7 @@ SELECT
     projects.name AS 案件名,
     companies.code AS 企業コード,
     companies.name AS 企業名,
-    COALESCE(items.required_quantity,1) AS 商品小口数
+    COALESCE(items.required_quantity,1) AS 出荷数
 FROM items
 LEFT JOIN projects
     ON items.project_id = projects.id
@@ -423,7 +423,7 @@ label_list = []
 
 for row in label_rows:
 
-    qty = int(row["商品小口数"])
+    qty = int(row["出荷数"])
 
     for _ in range(qty):
         label_list.append(
@@ -433,7 +433,7 @@ for row in label_rows:
                 "商品コード": row["商品コード"],
                 "商品名": row["商品名"],
                 "案件名": row["案件名"],
-                "商品小口数": row["商品小口数"],
+                "出荷数": row["出荷数"],
                 "バーコード文字": str(row["商品コード"])
             }
         )
@@ -520,7 +520,7 @@ for row in rows:
             "案件名": row["project_name"],
             "商品コード": row["code"],
             "商品名": row["name"],
-            "商品小口数": int(row["required_quantity"] or 1)
+            "出荷数": int(row["required_quantity"] or 1)
         }
     )
 
