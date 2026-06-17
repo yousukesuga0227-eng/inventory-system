@@ -568,11 +568,18 @@ try:
         conn,
         """
         SELECT
-            id,
-            code,
-            name
-        FROM projects
-        ORDER BY name
+            p.id,
+            p.code,
+            p.name,
+            c.code AS company_code,
+            c.name AS company_name
+        FROM projects p
+        LEFT JOIN project_companies pc
+            ON p.id = pc.project_id
+        LEFT JOIN companies c
+            ON pc.company_id = c.id
+        WHERE COALESCE(p.is_hidden, FALSE) = FALSE
+        ORDER BY c.code, p.name
         """
     )
 
