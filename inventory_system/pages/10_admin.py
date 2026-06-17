@@ -602,12 +602,28 @@ with tabs[3]:
 # 🕶 SHARK BLACK BOX
 # =====================
 
-st.markdown("---")
+st.markdown("""
+<style>
+div[data-testid="stButton"] button[kind="secondary"] {
+    background: transparent;
+    border: none;
+    padding: 0;
+    color: #888888;
+    font-size: 12px;
+    box-shadow: none;
+}
+div[data-testid="stButton"] button[kind="secondary"]:hover {
+    color: #444444;
+    background: transparent;
+    border: none;
+}
+</style>
+""", unsafe_allow_html=True)
 
 col1, col2 = st.columns([1, 10])
 
 with col1:
-    if st.button("ver1.1", key="secret_black_box_button"):
+    if st.button("Ver 1.101", key="black_box_version_button"):
         st.session_state.show_black_box = not st.session_state.get(
             "show_black_box",
             False
@@ -619,17 +635,25 @@ if st.session_state.get("show_black_box", False):
 
     logs = conn.execute("""
         SELECT
-            username AS ユーザーID,
-            display_name AS 表示名,
-            role AS 権限,
-            login_at AS ログイン日時
+            username,
+            role,
+            login_at
         FROM login_logs
         ORDER BY login_at DESC
         LIMIT 100
     """).fetchall()
 
+    data = []
+
+    for log in logs:
+        data.append({
+            "ユーザーID": log["username"],
+            "権限": log["role"],
+            "ログイン日時": log["login_at"],
+        })
+
     st.dataframe(
-        logs,
+        data,
         use_container_width=True,
         hide_index=True
     )

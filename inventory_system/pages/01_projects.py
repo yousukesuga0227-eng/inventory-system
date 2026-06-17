@@ -1,8 +1,5 @@
 import streamlit as st
-import os
-import barcode
 from datetime import datetime
-from barcode.writer import ImageWriter
 from database import get_connection, log_action
 from auth import check_admin
 
@@ -11,75 +8,68 @@ check_admin()
 conn = get_connection()
 
 st.title("案件管理")
-st.success(
-    f"ログイン中：{st.session_state.username}"
-)
+st.success(f"ログイン中：{st.session_state.username}")
 
 # =====================
 # 案件登録フォーム
 # =====================
-
 st.subheader("案件登録")
 
-code = st.text_input(
-    "案件コード"
-)
+# ---- 企業検索・選択 ----
+search_company = st.text_input("企業検索（企業コード・企業名）")
 
-name = st.text_input(
-    "案件名"
-)
+companies = conn.execute("""
+    SELECT id, code, name
+    FROM companies
+    WHERE COALESCE(is_active, TRUE) = TRUE
+      AND (
+        code ILIKE ?
+        OR name ILIKE ?
+      )
+    ORDER BY code
+    LIMIT 50
+""", (
+    f"%{search_company}%",
+    f"%{search_company}%"
+)).fetchall()
 
-# =====================
-# 入庫予定日
-# =====================
+companies = [dict(row) for row in companies]
 
-receive_unknown = st.checkbox(
-    "入庫予定日を未定にする"
-)
+company_options = {
+    f"{row['code']}：{row['name']}": row["id"]
+    for row in companies
+}
+
+selected_company_id = None
+
+if company_options:
+    selected_company_label = st.selectbox(
+        "企業",
+        list(company_options.keys())
+    )
+    selected_company_id = company_options[selected_company_label]
+else:
+    st.warning("該当する企業がありません。企業管理から登録してください。")
+
+# ---- 案件情報入力 ----
+code = st.text_input("案件コード")
+name = st.text_input("案件名")
+
+receive_unknown = st.checkbox("入庫予定日を未定にする")
 
 if receive_unknown:
-
     receive_date = "未定"
-
-    st.info(
-        "入庫予定日は「未定」として登録されます"
-    )
-
+    st.info("入庫予定日は「未定」として登録されます")
 else:
+    receive_date = st.date_input("入庫予定日").strftime("%Y-%m-%d")
 
-    receive_date_input = st.date_input(
-        "入庫予定日"
-    )
-
-    receive_date = receive_date_input.strftime(
-        "%Y-%m-%d"
-    )
-
-# =====================
-# 出荷予定日
-# =====================
-
-shipping_unknown = st.checkbox(
-    "出荷予定日を未定にする"
-)
+shipping_unknown = st.checkbox("出荷予定日を未定にする")
 
 if shipping_unknown:
-
     shipping_date = "未定"
-
-    st.info(
-        "出荷予定日は「未定」として登録されます"
-    )
-
+    st.info("出荷予定日は「未定」として登録されます")
 else:
-
-    shipping_date_input = st.date_input(
-        "出荷予定日"
-    )
-
-    shipping_date = shipping_date_input.strftime(
-        "%Y-%m-%d"
-    )
+    shipping_date = st.date_input("出荷予定日").strftime("%Y-%m-%d")
 
 status = st.selectbox(
     "案件状態",
@@ -92,23 +82,20 @@ status = st.selectbox(
     ]
 )
 
-memo = st.text_area(
-    "備考"
-)
+memo = st.text_area("備考")
 
+# ---- 案件登録処理 ----
 if st.button("案件登録"):
 
-    if not code or not name:
+    if selected_company_id is None:
+        st.warning("企業を選択してください。")
 
-        st.warning(
-            "案件コードと案件名を入力してください"
-        )
+    elif not code or not name:
+        st.warning("案件コードと案件名を入力してください。")
 
     else:
-
-        cursor = conn.execute(
-            """
-            INSERT INTO projects(
+        cursor = conn.execute("""
+            INSERT INTO projects (
                 code,
                 name,
                 receive_date,
@@ -119,21 +106,31 @@ if st.button("案件登録"):
             )
             VALUES (?, ?, ?, ?, ?, ?, ?)
             RETURNING id
-            """,
-            (
-                code,
-                name,
-                receive_date,
-                shipping_date,
-                status,
-                memo,
-                datetime.now().strftime(
-                    "%Y-%m-%d %H:%M:%S"
-                )
-            )
-        )
+        """, (
+            code,
+            name,
+            receive_date,
+            shipping_date,
+            status,
+            memo,
+            datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        ))
 
-        new_project_id = cursor.fetchone()[0]
+        new_project = cursor.fetchone()
+        new_project_id = new_project["id"]
+
+        conn.execute("""
+            INSERT INTO project_companies (
+                project_id,
+                company_id
+            )
+            VALUES (?, ?)
+            ON CONFLICT (project_id)
+            DO UPDATE SET company_id = EXCLUDED.company_id
+        """, (
+            new_project_id,
+            selected_company_id
+        ))
 
         conn.commit()
 
@@ -146,122 +143,98 @@ if st.button("案件登録"):
             f"案件コード: {code}"
         )
 
-        # バーコード保存フォルダ作成
-        os.makedirs(
-            "barcodes/projects",
-            exist_ok=True
-        )
-
-        # Code128
-        barcode_class = barcode.get_barcode_class(
-            "code128"
-        )
-
-        barcode_obj = barcode_class(
-            code,
-            writer=ImageWriter()
-        )
-
-        # 保存
-        barcode_obj.save(
-            f"barcodes/projects/{code}"
-        )
-
-        st.success(
-            "案件登録 + バーコード生成完了"
-        )
-
+        st.success("案件を登録しました。")
         st.rerun()
 
 st.write("---")
 
 # =====================
-# 並び順
+# 案件一覧
 # =====================
+st.subheader("案件一覧")
+
+search_text = st.text_input("案件検索")
 
 sort_option = st.selectbox(
     "並び順",
     [
         "ID順",
+        "企業コード順",
         "案件コード順",
         "案件名順"
     ]
 )
 
-order_by = "id"
+order_by = "p.id"
 
-if sort_option == "案件コード順":
-
-    order_by = "code"
-
+if sort_option == "企業コード順":
+    order_by = "c.code"
+elif sort_option == "案件コード順":
+    order_by = "p.code"
 elif sort_option == "案件名順":
-
-    order_by = "name"
-
-# =====================
-# 案件一覧
-# =====================
-
-st.subheader("案件一覧")
-
-search_text = st.text_input(
-    "案件検索"
-)
+    order_by = "p.name"
 
 query = """
-SELECT *
-FROM projects
-WHERE
-    COALESCE(is_hidden, FALSE) = FALSE
+SELECT
+    p.id,
+    c.code AS company_code,
+    c.name AS company_name,
+    p.code,
+    p.name,
+    p.receive_date,
+    p.shipping_date,
+    p.status
+FROM projects p
+LEFT JOIN project_companies pc
+    ON p.id = pc.project_id
+LEFT JOIN companies c
+    ON pc.company_id = c.id
+WHERE COALESCE(p.is_hidden, FALSE) = FALSE
 """
 
 params = []
 
-# 検索条件
 if search_text:
-
     query += """
     AND (
-        code LIKE ?
-        OR name LIKE ?
+        p.code ILIKE ?
+        OR p.name ILIKE ?
+        OR c.code ILIKE ?
+        OR c.name ILIKE ?
     )
     """
 
-    params.append(
+    params.extend([
+        f"%{search_text}%",
+        f"%{search_text}%",
+        f"%{search_text}%",
         f"%{search_text}%"
-    )
-
-    params.append(
-        f"%{search_text}%"
-    )
+    ])
 
 query += f"""
 ORDER BY {order_by}
 """
 
-rows = conn.execute(
-    query,
-    params
-).fetchall()
+rows = conn.execute(query, params).fetchall()
+rows = [dict(row) for row in rows]
 
 project_list = []
 
 for row in rows:
-
-    project_list.append(
-        {
-            "ID": row["id"],
-            "案件コード": row["code"],
-            "案件名": row["name"],
-            "入庫予定": row["receive_date"],
-            "出荷予定": row["shipping_date"],
-            "状態": row["status"]
-        }
-    )
+    project_list.append({
+        "ID": row["id"],
+        "企業コード": row["company_code"],
+        "企業名": row["company_name"],
+        "案件コード": row["code"],
+        "案件名": row["name"],
+        "入庫予定": row["receive_date"],
+        "出荷予定": row["shipping_date"],
+        "状態": row["status"]
+    })
 
 st.dataframe(
     project_list,
-    use_container_width=True,
+    width="stretch",
     hide_index=True
 )
 
@@ -270,7 +243,6 @@ st.write("---")
 # =====================
 # 未定日付の再設定
 # =====================
-
 st.subheader("未定日付の再設定")
 
 unknown_projects = [
@@ -281,36 +253,21 @@ unknown_projects = [
 ]
 
 if not unknown_projects:
-
-    st.info(
-        "入庫予定日・出荷予定日が未定の案件はありません"
-    )
+    st.info("入庫予定日・出荷予定日が未定の案件はありません")
 
 else:
-
-    st.write(
-        f"未定の日付がある案件：{len(unknown_projects)}件"
-    )
+    st.write(f"未定の日付がある案件：{len(unknown_projects)}件")
 
     for row in unknown_projects:
 
-        with st.expander(
-            f'{row["code"]} / {row["name"]}'
-        ):
+        with st.expander(f'{row["code"]} / {row["name"]}'):
 
-            st.write(
-                f'現在の入庫予定：{row["receive_date"]}'
-            )
-
-            st.write(
-                f'現在の出荷予定：{row["shipping_date"]}'
-            )
+            st.write(f'現在の入庫予定：{row["receive_date"]}')
+            st.write(f'現在の出荷予定：{row["shipping_date"]}')
 
             col1, col2 = st.columns(2)
 
-            # 入庫予定日が未定の場合だけ再設定
             with col1:
-
                 if row["receive_date"] == "未定":
 
                     new_receive_date = st.date_input(
@@ -322,20 +279,14 @@ else:
                         "入庫予定日を更新",
                         key=f"update_receive_{row['id']}"
                     ):
-
-                        conn.execute(
-                            """
+                        conn.execute("""
                             UPDATE projects
                             SET receive_date = ?
                             WHERE id = ?
-                            """,
-                            (
-                                new_receive_date.strftime(
-                                    "%Y-%m-%d"
-                                ),
-                                row["id"]
-                            )
-                        )
+                        """, (
+                            new_receive_date.strftime("%Y-%m-%d"),
+                            row["id"]
+                        ))
 
                         conn.commit()
 
@@ -348,21 +299,12 @@ else:
                             f"入庫予定日: 未定 → {new_receive_date.strftime('%Y-%m-%d')}"
                         )
 
-                        st.success(
-                            "入庫予定日を更新しました"
-                        )
-
+                        st.success("入庫予定日を更新しました")
                         st.rerun()
-
                 else:
+                    st.info("入庫予定日は設定済みです")
 
-                    st.info(
-                        "入庫予定日は設定済みです"
-                    )
-
-            # 出荷予定日が未定の場合だけ再設定
             with col2:
-
                 if row["shipping_date"] == "未定":
 
                     new_shipping_date = st.date_input(
@@ -374,20 +316,14 @@ else:
                         "出荷予定日を更新",
                         key=f"update_shipping_{row['id']}"
                     ):
-
-                        conn.execute(
-                            """
+                        conn.execute("""
                             UPDATE projects
                             SET shipping_date = ?
                             WHERE id = ?
-                            """,
-                            (
-                                new_shipping_date.strftime(
-                                    "%Y-%m-%d"
-                                ),
-                                row["id"]
-                            )
-                        )
+                        """, (
+                            new_shipping_date.strftime("%Y-%m-%d"),
+                            row["id"]
+                        ))
 
                         conn.commit()
 
@@ -400,14 +336,9 @@ else:
                             f"出荷予定日: 未定 → {new_shipping_date.strftime('%Y-%m-%d')}"
                         )
 
-                        st.success(
-                            "出荷予定日を更新しました"
-                        )
-
+                        st.success("出荷予定日を更新しました")
                         st.rerun()
-
                 else:
+                    st.info("出荷予定日は設定済みです")
 
-                    st.info(
-                        "出荷予定日は設定済みです"
-                    )
+conn.close()

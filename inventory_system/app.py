@@ -30,55 +30,6 @@ boot_logo_path = os.path.join(
     "assets",
     "shark_01.jpg"
 )
-
-# =====================
-# ログインユーザー
-# 後で users.py / usersテーブルに移行予定
-# =====================
-
-USERS = {
-    "admin": {
-        "password": "1234",
-        "role": "admin"
-    },
-    "user": {
-        "password": "0000",
-        "role": "user"
-    },
-    "壽賀": {
-        "password": "0227",
-        "role": "admin"
-    },
-    "若杉": {
-        "password": "8147",
-        "role": "admin"
-    },
-    "鮫島": {
-        "password": "0904",
-        "role": "admin"
-    },
-    "山縣": {
-        "password": "1111",
-        "role": "admin"
-    },
-    "小寺": {
-        "password": "2222",
-        "role": "admin"
-    },
-    "河野": {
-        "password": "3333",
-        "role": "admin"
-    },
-    "鮫島昇汰": {
-        "password": "0416",
-        "role": "admin"
-    },
-    "竹中": {
-        "password": "0522",
-        "role": "admin"
-    },
-}
-
 # =====================
 # セッション初期化
 # =====================
@@ -170,9 +121,7 @@ if not st.session_state.login:
 
     st.title("🔐 ログイン")
 
-    username = st.text_input(
-        "ユーザー名"
-    )
+    username = st.text_input("ユーザー名")
 
     password = st.text_input(
         "パスワード",
@@ -181,30 +130,52 @@ if not st.session_state.login:
 
     if st.button("ログイン"):
 
-        if username in USERS:
+        conn = get_connection()
 
-            if password == USERS[username]["password"]:
+        user = conn.execute("""
+            SELECT *
+            FROM users
+            WHERE username = ?
+            AND password = ?
+            AND is_active = TRUE
+        """, (
+            username.lower().strip(),
+            password.strip()
+        )).fetchone()
 
-                st.session_state.login = True
-                st.session_state.role = USERS[username]["role"]
-                st.session_state.username = username
+        if user:
 
-                st.rerun()
+            st.session_state.login = True
+            st.session_state.role = user["role"]
+            st.session_state.username = user["username"]
+            st.session_state.display_name = user["display_name"]
 
-            else:
-
-                st.error(
-                    "パスワードが違います"
+            conn.execute("""
+                INSERT INTO login_logs (
+                    user_id,
+                    username,
+                    display_name,
+                    role
                 )
+                VALUES (?, ?, ?, ?)
+            """, (
+                user["id"],
+                user["username"],
+                user["display_name"],
+                user["role"]
+            ))
+
+            conn.commit()
+            conn.close()
+
+            st.rerun()
 
         else:
 
-            st.error(
-                "ユーザーが存在しません"
-            )
+            conn.close()
+            st.error("ユーザー名またはパスワードが違います")
 
     st.stop()
-
 # =====================
 # ログイン後ここから
 # =====================
