@@ -446,35 +446,43 @@ if st.session_state.role == "admin":
         ]
     )
 
-# 一般ユーザーも表示
-menu_items.extend(
-    [
-        {
-            "page": "pages/03_stock.py",
-            "label": "📥📤 入出庫登録"
-        },
-        {
-            "page": "pages/04_stock_list.py",
-            "label": "📊 在庫一覧"
-        },
-        {
-            "page": "pages/05_history.py",
-            "label": "📝 入出庫履歴"
-        },
-        {
-            "page": "pages/06_inventory_check.py",
-            "label": "🧮 棚卸"
-        },
-        {
-            "page": "pages/07_item_search.py",
-            "label": "🔍 商品検索"
-        },
-        {
-            "page": "pages/08_shipping_instruction.py",
-            "label": "📄 出荷指示書"
-        },
-    ]
-)
+# 入出庫・ラベル用アカウント
+if st.session_state.role in ["admin", "warehouse", "label_user"]:
+    menu_items.extend(
+        [
+            {
+                "page": "pages/03_stock.py",
+                "label": "📥📤 入出庫登録"
+            },
+            {
+                "page": "pages/04_stock_list.py",
+                "label": "📊 在庫一覧"
+            },
+            {
+                "page": "pages/07_item_search.py",
+                "label": "🔍 商品検索"
+            },
+            {
+                "page": "pages/08_shipping_instruction.py",
+                "label": "📄 出荷指示書"
+            },
+        ]
+    )
+
+# adminだけ履歴・棚卸も表示
+if st.session_state.role == "admin":
+    menu_items.extend(
+        [
+            {
+                "page": "pages/05_history.py",
+                "label": "📝 入出庫履歴"
+            },
+            {
+                "page": "pages/06_inventory_check.py",
+                "label": "🧮 棚卸"
+            },
+        ]
+    )
 
 # 管理者だけ表示
 if st.session_state.role == "admin":
