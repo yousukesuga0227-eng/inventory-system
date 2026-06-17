@@ -397,9 +397,9 @@ def make_label_png(item):
     )
 
     # =========================
-    # 商品名 2行表示
+    # 商品名 2行表示・大きめ
     # =========================
-    y += 14
+    y += 12
 
     item_text = f"商品名：{item_name}"
 
@@ -407,18 +407,17 @@ def make_label_png(item):
 
     max_chars = 18
 
-    if len(item_text) > max_chars:
-        line1 = item_text[:max_chars]
-        line2 = item_text[max_chars:max_chars * 2]
+    line1 = item_text[:max_chars]
+    line2 = item_text[max_chars:max_chars * 2]
 
-        draw.text((margin, y), line1, fill="black", font=item_font)
-        y += 34
+    draw.text((margin, y), line1, fill="black", font=item_font)
+    y += 46
 
+    if line2:
         draw.text((margin, y), line2, fill="black", font=item_font)
-        y += 34
+        y += 46
     else:
-        draw.text((margin, y), item_text, fill="black", font=item_font)
-        y += 38
+        y += 10
 
     # =========================
     # 企業名
@@ -447,15 +446,20 @@ def make_label_png(item):
     if item_code:
         barcode_img = make_barcode_png(item_code)
 
-        # 幅を少し狭める
-        target_w = width_px - 60
+        # 横幅をラベルいっぱいに近づける
+        target_w = width_px - 20
         ratio = target_w / barcode_img.width
         target_h = int(barcode_img.height * ratio)
+
+        # 縦方向も少し大きくする
+        target_h = int(target_h * 1.2)
 
         barcode_img = barcode_img.resize((target_w, target_h))
 
         x = int((width_px - target_w) / 2)
-        y_bar = height_px - target_h - 18
+
+        # 下ギリギリに配置
+        y_bar = height_px - target_h - 8
 
         img.paste(barcode_img, (x, y_bar))
 
