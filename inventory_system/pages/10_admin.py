@@ -228,6 +228,31 @@ with tabs[1]:
                 "商品名",
                 value=item["name"] or ""
             )
+            
+            new_required_quantity = st.number_input(
+                "商品小口数",
+                min_value=1,
+                value=int(item["required_quantity"])
+            )
+
+            if st.button("更新", key=f"update_{item['id']}"):
+
+                conn.execute(
+                    """
+                    UPDATE items
+                    SET required_quantity = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        new_required_quantity,
+                        item["id"]
+                    )
+                )
+
+                conn.commit()
+
+                st.success("更新しました")
+                st.rerun()
 
             if st.button("商品情報を更新"):
 
