@@ -680,13 +680,25 @@ selected_items = [
 
 st.write(f"選択中：{len(selected_items)} 件")
 
-print_count = st.number_input(
-    "同じラベルを印刷する枚数",
-    min_value=1,
-    max_value=100,
-    value=1,
-    step=1
+print_mode = st.radio(
+    "印刷枚数の指定方法",
+    [
+        "任意枚数印刷",
+        "出荷数分印刷"
+    ],
+    horizontal=True
 )
+
+print_count = 1
+
+if print_mode == "任意枚数印刷":
+    print_count = st.number_input(
+        "同じラベルを印刷する枚数",
+        min_value=1,
+        max_value=100,
+        value=1,
+        step=1
+    )
 
 with st.expander("選択商品の確認", expanded=False):
     for item in selected_items:
