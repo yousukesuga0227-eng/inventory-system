@@ -771,7 +771,11 @@ with col3:
                 print_items = []
 
                 for item in selected_items:
-                    qty = int(item.get("required_quantity") or 1)
+
+                    if print_mode == "出荷数分印刷":
+                        qty = int(item.get("required_quantity") or 1)
+                    else:
+                        qty = int(print_count)
 
                     for _ in range(qty):
                         print_items.append(item)
