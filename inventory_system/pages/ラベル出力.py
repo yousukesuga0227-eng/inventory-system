@@ -200,8 +200,8 @@ DEFAULT_QL820_IP = "192.168.0.18"
 QL820_MODEL = "QL-820NWB"
 
 # 今回成功したテストロール設定
-DEFAULT_QL820_LABEL_SIZE = "62red"
-DEFAULT_QL820_RED = True
+DEFAULT_QL820_LABEL_SIZE = "62"
+DEFAULT_QL820_RED = False
 DEFAULT_QL820_CUT = True
 
 
@@ -218,19 +218,14 @@ ql820_ip = st.sidebar.text_input(
 ql820_label_size = st.sidebar.selectbox(
     "ロール種類",
     options=[
-        "62red",
         "62",
-        "29x90",
-        "29x62",
-        "62x100",
     ],
     index=0
 )
 
-ql820_red = st.sidebar.checkbox(
-    "赤黒ロールとして送信",
-    value=DEFAULT_QL820_RED
-)
+ql820_red = False
+
+st.sidebar.caption("用紙：DK-2205 白テープ / 黒印字")
 
 ql820_cut = st.sidebar.checkbox(
     "印刷後にカット",
@@ -238,7 +233,7 @@ ql820_cut = st.sidebar.checkbox(
 )
 
 st.sidebar.caption(
-    "今回のテストロールは 62red / 赤黒ON / カットOFF で成功。"
+    "今回のテストロールは 62 / 赤黒OFF / カットON で成功。"
 )
 
 
@@ -683,6 +678,14 @@ selected_items = [
 
 st.write(f"選択中：{len(selected_items)} 件")
 
+print_count = st.number_input(
+    "同じラベルを印刷する枚数",
+    min_value=1,
+    max_value=100,
+    value=1,
+    step=1
+)
+
 with st.expander("選択商品の確認", expanded=False):
     for item in selected_items:
         st.write(
@@ -751,15 +754,21 @@ with col3:
                 st.stop()
 
             with st.spinner("QL-820へ印刷データを送信中..."):
-                printed_count = print_labels_to_ql820(
-                    selected_items,
-                    printer_ip=ql820_ip.strip(),
-                    label_size=ql820_label_size,
-                    red=ql820_red,
-                    cut=ql820_cut
-                )
+                print_items = []
 
-            st.success(f"QL-820へ {printed_count} 件のラベルを送信しました。")
+            for item in selected_items:
+                for _ in range(print_count):
+                    print_items.append(item)
+
+            printed_count = print_labels_to_ql820(
+                print_items,
+                printer_ip=ql820_ip.strip(),
+                label_size=ql820_label_size,
+                red=ql820_red,
+                cut=ql820_cut
+            )
+
+            st.success(f"QL-820へ {printed_count} 枚のラベルを送信しました。")
 
         except Exception as e:
             st.error("QL-820への直接印刷に失敗しました。")
