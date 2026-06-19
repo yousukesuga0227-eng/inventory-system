@@ -240,7 +240,7 @@ with tabs[1]:
                 conn.execute(
                     """
                     UPDATE items
-                    SET required_quantity = ?
+                    SET is_hidden = TRUE
                     WHERE id = ?
                     """,
                     (

@@ -639,6 +639,7 @@ try:
             ON pc.company_id = c.id
 
         WHERE i.project_id = {ph}
+        AND COALESCE(i.is_hidden, FALSE) = FALSE
         ORDER BY i.name
         """,
         [selected_project_id]
