@@ -235,12 +235,12 @@ with tabs[1]:
                 value=int(item["required_quantity"])
             )
 
-            if st.button("更新", key=f"update_{item['id']}"):
+            if st.button("出荷数を更新", key=f"update_qty_{item['id']}"):
 
                 conn.execute(
                     """
                     UPDATE items
-                    SET is_hidden = TRUE
+                    SET required_quantity = ?
                     WHERE id = ?
                     """,
                     (
@@ -250,8 +250,7 @@ with tabs[1]:
                 )
 
                 conn.commit()
-
-                st.success("更新しました")
+                st.success("出荷数を更新しました")
                 st.rerun()
 
             if st.button("商品情報を更新"):
