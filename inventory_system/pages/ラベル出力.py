@@ -619,6 +619,7 @@ try:
             i.id AS item_id,
             i.code AS item_code,
             i.name AS item_name,
+            i.required_quantity AS required_quantity,
 
             p.code AS project_code,
             p.name AS project_name,
@@ -757,17 +758,19 @@ with col3:
             with st.spinner("QL-820へ印刷データを送信中..."):
                 print_items = []
 
-            for item in selected_items:
-                for _ in range(print_count):
-                    print_items.append(item)
+                for item in selected_items:
+                    qty = int(item.get("required_quantity") or 1)
 
-            printed_count = print_labels_to_ql820(
-                print_items,
-                printer_ip=ql820_ip.strip(),
-                label_size=ql820_label_size,
-                red=ql820_red,
-                cut=ql820_cut
-            )
+                    for _ in range(qty):
+                        print_items.append(item)
+
+                printed_count = print_labels_to_ql820(
+                    print_items,
+                    printer_ip=ql820_ip.strip(),
+                    label_size=ql820_label_size,
+                    red=ql820_red,
+                    cut=ql820_cut
+                )
 
             st.success(f"QL-820へ {printed_count} 枚のラベルを送信しました。")
 
