@@ -92,6 +92,20 @@ barcode_item = None
 if barcode:
     clean_barcode = barcode.strip()
 
+    # 商品検索処理
+    # barcode_item = ...
+
+if st.button("入出庫登録"):
+    # 登録処理
+    # conn.commit()
+
+    st.success("入出庫を登録しました。")
+
+    # 入力欄を空にする
+    st.session_state.barcode_input = ""
+    st.rerun()
+        
+
     # SHARK形式 案件コード_商品コード にも対応
     if "_" in clean_barcode:
         clean_barcode = clean_barcode.split("_")[-1]
