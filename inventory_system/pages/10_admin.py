@@ -291,290 +291,86 @@ with tabs[1]:
 
 with tabs[2]:
 
-    st.subheader("商品 / 案件の非表示")
+    st.subheader("🙈 非表示管理")
 
     st.warning(
-        "ここでは完全削除ではなく、通常画面から非表示にします。履歴は残ります。"
+        "チェックONで通常画面から非表示にします。チェックOFFで表示に戻します。"
     )
 
-    mode = st.radio(
-        "対象",
-        [
-            "案件を非表示",
-            "商品を非表示",
-            "非表示を戻す"
-        ],
-        horizontal=True
-    )
+    projects = conn.execute(
+        """
+        SELECT *
+        FROM projects
+        WHERE COALESCE(is_hidden, FALSE) = FALSE
+        ORDER BY name
+        """
+    ).fetchall()
 
-    now_text = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    if not projects:
+        st.info("案件がありません")
 
-    if mode == "案件を非表示":
+    else:
+        project_options = {
+            f'{p["code"]} / {p["name"]}': p["id"]
+            for p in projects
+        }
 
-        projects = conn.execute(
-            """
-            SELECT *
-            FROM projects
-            WHERE COALESCE(is_hidden, FALSE) = FALSE
-            ORDER BY id DESC
-            """
-        ).fetchall()
+        selected_project_label = st.selectbox(
+            "案件を選択",
+            list(project_options.keys()),
+            key="hide_manage_project"
+        )
 
-        if not projects:
-
-            st.info("非表示にできる案件がありません")
-
-        else:
-
-            project_options = {
-                f'{p["id"]} / {p["code"]} / {p["name"]}': p["id"]
-                for p in projects
-            }
-
-            selected = st.selectbox(
-                "非表示にする案件",
-                list(project_options.keys())
-            )
-
-            target_id = project_options[selected]
-
-            confirm = st.checkbox("この案件を非表示にする")
-
-            if st.button("案件を非表示"):
-
-                if not confirm:
-
-                    st.warning("チェックを入れてください")
-                    st.stop()
-
-                conn.execute(
-                    """
-                    UPDATE projects
-                    SET
-                        is_hidden = TRUE,
-                        hidden_at = ?,
-                        hidden_by = ?
-                    WHERE id = ?
-                    """,
-                    (
-                        now_text,
-                        st.session_state.username,
-                        target_id
-                    )
-                )
-
-                conn.commit()
-
-                log_action(
-                    st.session_state.username,
-                    "案件非表示",
-                    "projects",
-                    target_id,
-                    selected,
-                    "管理ページから非表示"
-                )
-
-                st.success("案件を非表示にしました")
-                st.rerun()
-
-    elif mode == "商品を非表示":
+        selected_project_id = project_options[selected_project_label]
 
         items = conn.execute(
             """
             SELECT
-                items.id AS item_id,
-                items.code AS item_code,
-                items.name AS item_name,
-                projects.name AS project_name
+                id,
+                code,
+                name,
+                COALESCE(is_hidden, FALSE) AS is_hidden
             FROM items
-            LEFT JOIN projects
-                ON items.project_id = projects.id
-            WHERE COALESCE(items.is_active, TRUE) = TRUE
-            ORDER BY projects.name, items.code
-            """
+            WHERE project_id = ?
+            ORDER BY code
+            """,
+            (selected_project_id,)
         ).fetchall()
 
         if not items:
-
-            st.info("非表示にできる商品がありません")
+            st.info("この案件には商品がありません")
 
         else:
+            st.write("### 案件内の商品一覧")
 
-            item_options = {
-                f'{i["item_id"]} / {i["project_name"]} / {i["item_code"]} / {i["item_name"]}': i["item_id"]
-                for i in items
-            }
+            for item in items:
+                st.checkbox(
+                    f'{item["code"]} / {item["name"]}',
+                    value=bool(item["is_hidden"]),
+                    key=f'hide_item_{item["id"]}'
+                )
 
-            selected = st.selectbox(
-                "非表示にする商品",
-                list(item_options.keys())
-            )
+            if st.button("非表示設定を更新", type="primary"):
 
-            target_id = item_options[selected]
+                for item in items:
+                    new_hidden = st.session_state[f'hide_item_{item["id"]}']
 
-            confirm = st.checkbox("この商品を非表示にする")
-
-            if st.button("商品を非表示"):
-
-                if not confirm:
-
-                    st.warning("チェックを入れてください")
-                    st.stop()
-
-                conn.execute(
-                    """
-                    UPDATE items
-                    SET
-                        is_active = FALSE,
-                        hidden_at = ?,
-                        hidden_by = ?
-                    WHERE id = ?
-                    """,
-                    (
-                        now_text,
-                        st.session_state.username,
-                        target_id
+                    conn.execute(
+                        """
+                        UPDATE items
+                        SET is_hidden = ?
+                        WHERE id = ?
+                        """,
+                        (
+                            new_hidden,
+                            item["id"]
+                        )
                     )
-                )
 
                 conn.commit()
 
-                log_action(
-                    st.session_state.username,
-                    "商品非表示",
-                    "items",
-                    target_id,
-                    selected,
-                    "管理ページから非表示"
-                )
-
-                st.success("商品を非表示にしました")
+                st.success("非表示設定を更新しました")
                 st.rerun()
-
-    else:
-
-        st.write("非表示中の案件・商品を戻します")
-
-        hidden_projects = conn.execute(
-            """
-            SELECT *
-            FROM projects
-            WHERE COALESCE(is_hidden, FALSE) = TRUE
-            ORDER BY hidden_at DESC
-            """
-        ).fetchall()
-
-        hidden_items = conn.execute(
-            """
-            SELECT
-                items.id AS item_id,
-                items.code AS item_code,
-                items.name AS item_name,
-                projects.name AS project_name
-            FROM items
-            LEFT JOIN projects
-                ON items.project_id = projects.id
-            WHERE COALESCE(items.is_active, TRUE) = FALSE
-            ORDER BY items.hidden_at DESC
-            """
-        ).fetchall()
-
-        st.write("非表示案件")
-
-        if hidden_projects:
-
-            project_options = {
-                f'{p["id"]} / {p["code"]} / {p["name"]}': p["id"]
-                for p in hidden_projects
-            }
-
-            selected_project = st.selectbox(
-                "戻す案件",
-                list(project_options.keys())
-            )
-
-            target_project_id = project_options[selected_project]
-
-            if st.button("案件の非表示を解除"):
-
-                conn.execute(
-                    """
-                    UPDATE projects
-                    SET
-                        is_hidden = FALSE,
-                        hidden_at = NULL,
-                        hidden_by = NULL
-                    WHERE id = ?
-                    """,
-                    (target_project_id,)
-                )
-
-                conn.commit()
-
-                log_action(
-                    st.session_state.username,
-                    "案件非表示解除",
-                    "projects",
-                    target_project_id,
-                    selected_project,
-                    "管理ページから解除"
-                )
-
-                st.success("案件の非表示を解除しました")
-                st.rerun()
-
-        else:
-
-            st.info("非表示中の案件はありません")
-
-        st.write("---")
-        st.write("非表示商品")
-
-        if hidden_items:
-
-            item_options = {
-                f'{i["item_id"]} / {i["project_name"]} / {i["item_code"]} / {i["item_name"]}': i["item_id"]
-                for i in hidden_items
-            }
-
-            selected_item = st.selectbox(
-                "戻す商品",
-                list(item_options.keys())
-            )
-
-            target_item_id = item_options[selected_item]
-
-            if st.button("商品の非表示を解除"):
-
-                conn.execute(
-                    """
-                    UPDATE items
-                    SET
-                        is_active = TRUE,
-                        hidden_at = NULL,
-                        hidden_by = NULL
-                    WHERE id = ?
-                    """,
-                    (target_item_id,)
-                )
-
-                conn.commit()
-
-                log_action(
-                    st.session_state.username,
-                    "商品非表示解除",
-                    "items",
-                    target_item_id,
-                    selected_item,
-                    "管理ページから解除"
-                )
-
-                st.success("商品の非表示を解除しました")
-                st.rerun()
-
-        else:
-
-            st.info("非表示中の商品はありません")
 
 # =====================
 # 完了案件確認
