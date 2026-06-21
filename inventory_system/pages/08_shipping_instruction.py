@@ -57,10 +57,14 @@ if "shipping_selected_project_id" not in st.session_state:
 if "shipping_mode" not in st.session_state:
     st.session_state.shipping_mode = "案件あり"
 
+if "shipping_qty_adjustments" not in st.session_state:
+    st.session_state.shipping_qty_adjustments = {}
+
 
 def reset_shipping_scan():
     st.session_state.shipping_scanned_codes = []
     st.session_state.shipping_barcode_input = ""
+    st.session_state.shipping_qty_adjustments = {}
 
 
 def add_barcode():
@@ -517,43 +521,86 @@ if mode == "案件あり":
         st.error("NGの商品があります")
         st.dataframe(invalid_results, width="stretch", hide_index=True)
 
-    all_quantity_ok = all(
-        scan_counter.get(code, 0) == quantity_map[code]
-        for code in quantity_map
+    st.write("---")
+    st.subheader("今回出荷数の確認・修正")
+    st.info("全てスキャン後、必要に応じて『今回出荷数』を修正してください。PDFには今回出荷数が反映されます。")
+
+    shipping_rows = []
+    pdf_items = []
+
+    for code, name in item_map.items():
+        required_qty = quantity_map[code]
+        scanned_qty = scan_counter.get(code, 0)
+
+        default_qty = st.session_state.shipping_qty_adjustments.get(code, scanned_qty)
+
+        ship_qty = st.number_input(
+            f"{code} / {name}",
+            min_value=0,
+            value=int(default_qty),
+            step=1,
+            key=f"ship_qty_{code}"
+        )
+
+        st.session_state.shipping_qty_adjustments[code] = ship_qty
+
+        diff = ship_qty - required_qty
+
+        if diff == 0:
+            status = "✅ OK"
+        elif diff < 0:
+            status = "🟡 不足"
+        else:
+            status = "🔴 超過"
+
+        shipping_rows.append(
+            {
+                "商品コード": code,
+                "商品名": name,
+                "必要個数": required_qty,
+                "読取個数": scanned_qty,
+                "今回出荷数": ship_qty,
+                "差異": diff,
+                "状態": status
+            }
+        )
+
+        if ship_qty > 0:
+            pdf_items.append(
+                {
+                    "code": code,
+                    "name": name,
+                    "quantity": ship_qty
+                }
+            )
+
+    st.dataframe(
+        shipping_rows,
+        width="stretch",
+        hide_index=True
     )
 
     can_create_pdf = (
-        len(scanned_codes) > 0
+        len(pdf_items) > 0
         and len(invalid_results) == 0
-        and all_quantity_ok
     )
 
-    if not all_quantity_ok:
-        st.warning("必要個数と読取個数が一致していない商品があります。")
-
-    if not can_create_pdf:
-        st.warning("出荷指示書は、読み取り結果がすべてOKになった時だけ作成できます。")
+    if invalid_results:
+        st.warning("NGの商品があるため、出荷指示書は作成できません。")
+    elif not pdf_items:
+        st.warning("今回出荷数が1以上の商品がありません。")
     else:
-        st.success("すべてOKです。出荷指示書を作成できます。")
+        st.success("今回出荷数をもとに出荷指示書を作成できます。")
 
     st.write("---")
 
     if st.button("📄 出荷指示書作成", disabled=not can_create_pdf):
 
-        pdf_items = [
-            {
-                "code": code,
-                "name": item_map[code],
-                "quantity": quantity_map[code]
-            }
-            for code in quantity_map
-        ]
-
         info_data = [
             ["企業名", project.get("company_name") or "", "企業コード", project.get("company_code") or ""],
             ["案件名", project["name"], "案件コード", project["code"]],
             ["出荷予定日", str(project["shipping_date"]), "発行日", datetime.now().strftime("%Y/%m/%d")],
-            ["発行者", st.session_state.username, "検品状態", "OK"],
+            ["発行者", st.session_state.username, "検品状態", "数量修正済"],
         ]
 
         pdf_data, file_name = create_shipping_pdf(
