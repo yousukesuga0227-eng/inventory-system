@@ -444,37 +444,75 @@ if mode == "案件あり":
     st.progress(progress_rate)
     st.metric("検品数", f"{checked_total} / {required_total}")
 
-    check_status_list = []
+st.subheader("検品進捗・数量修正")
 
-    for code, name in item_map.items():
+shipping_rows = []
+pdf_items = []
 
-        required_qty = quantity_map[code]
-        scanned_qty = scan_counter.get(code, 0)
+for code, name in item_map.items():
+    required_qty = quantity_map[code]
+    scanned_qty = scan_counter.get(code, 0)
 
-        if scanned_qty == required_qty:
-            status = "✅ OK"
-        elif scanned_qty == 0:
-            status = "未検品"
-        elif scanned_qty < required_qty:
-            status = "🟡 不足"
-        else:
-            status = "🔴 読み過ぎ"
+    default_qty = st.session_state.shipping_qty_adjustments.get(code, scanned_qty)
 
-        check_status_list.append(
-            {
-                "商品コード": code,
-                "商品名": name,
-                "必要個数": required_qty,
-                "読取個数": scanned_qty,
-                "状態": status
-            }
+    col1, col2, col3, col4, col5, col6 = st.columns([2, 4, 1, 1, 1, 2])
+
+    with col1:
+        st.write(code)
+
+    with col2:
+        st.write(name)
+
+    with col3:
+        st.write(f"必要 {required_qty}")
+
+    with col4:
+        st.write(f"読取 {scanned_qty}")
+
+    with col5:
+        ship_qty = st.number_input(
+            "今回",
+            min_value=0,
+            value=int(default_qty),
+            step=1,
+            key=f"ship_qty_{code}",
+            label_visibility="collapsed"
         )
 
-    st.dataframe(
-        check_status_list,
-        width="stretch",
-        hide_index=True
+    st.session_state.shipping_qty_adjustments[code] = ship_qty
+
+    diff = ship_qty - required_qty
+
+    if diff == 0:
+        status = "✅ OK"
+    elif diff < 0:
+        status = f"🟡 不足 {diff}"
+    else:
+        status = f"🔴 超過 +{diff}"
+
+    with col6:
+        st.write(status)
+
+    shipping_rows.append(
+        {
+            "商品コード": code,
+            "商品名": name,
+            "必要個数": required_qty,
+            "読取個数": scanned_qty,
+            "今回出荷数": ship_qty,
+            "差異": diff,
+            "状態": status
+        }
     )
+
+    if ship_qty > 0:
+        pdf_items.append(
+            {
+                "code": code,
+                "name": name,
+                "quantity": ship_qty
+            }
+        )
 
     valid_results = []
     invalid_results = []
@@ -519,78 +557,23 @@ if mode == "案件あり":
 
     if invalid_results:
         st.error("NGの商品があります")
-        st.dataframe(invalid_results, width="stretch", hide_index=True)
 
-    st.write("---")
-    st.subheader("今回出荷数の確認・修正")
-    st.info("全てスキャン後、必要に応じて『今回出荷数』を修正してください。PDFには今回出荷数が反映されます。")
+        for ng in invalid_results:
+            col1, col2, col3 = st.columns([1, 4, 2])
 
-    shipping_rows = []
-    pdf_items = []
+            with col1:
+                st.write(ng["No."])
 
-    for code, name in item_map.items():
-        required_qty = quantity_map[code]
-        scanned_qty = scan_counter.get(code, 0)
+            with col2:
+                st.write(ng["商品コード"])
 
-        default_qty = st.session_state.shipping_qty_adjustments.get(code, scanned_qty)
+            with col3:
+                if st.button("削除", key=f"delete_ng_{ng['No.']}"):
+                    delete_index = ng["No."] - 1
+                    if 0 <= delete_index < len(st.session_state.shipping_scanned_codes):
+                        st.session_state.shipping_scanned_codes.pop(delete_index)
+                        st.rerun()
 
-        ship_qty = st.number_input(
-            f"{code} / {name}",
-            min_value=0,
-            value=int(default_qty),
-            step=1,
-            key=f"ship_qty_{code}"
-        )
-
-        st.session_state.shipping_qty_adjustments[code] = ship_qty
-
-        diff = ship_qty - required_qty
-
-        if diff == 0:
-            status = "✅ OK"
-        elif diff < 0:
-            status = "🟡 不足"
-        else:
-            status = "🔴 超過"
-
-        shipping_rows.append(
-            {
-                "商品コード": code,
-                "商品名": name,
-                "必要個数": required_qty,
-                "読取個数": scanned_qty,
-                "今回出荷数": ship_qty,
-                "差異": diff,
-                "状態": status
-            }
-        )
-
-        if ship_qty > 0:
-            pdf_items.append(
-                {
-                    "code": code,
-                    "name": name,
-                    "quantity": ship_qty
-                }
-            )
-
-    st.dataframe(
-        shipping_rows,
-        width="stretch",
-        hide_index=True
-    )
-
-    can_create_pdf = (
-        len(pdf_items) > 0
-        and len(invalid_results) == 0
-    )
-
-    if invalid_results:
-        st.warning("NGの商品があるため、出荷指示書は作成できません。")
-    elif not pdf_items:
-        st.warning("今回出荷数が1以上の商品がありません。")
-    else:
-        st.success("今回出荷数をもとに出荷指示書を作成できます。")
 
     st.write("---")
 
@@ -721,8 +704,7 @@ else:
         )
 
     can_create_pdf = (
-        len(scanned_codes) > 0
-        and len(valid_results) > 0
+        len(pdf_items) > 0
         and len(invalid_results) == 0
     )
 
