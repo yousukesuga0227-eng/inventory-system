@@ -60,6 +60,9 @@ if "shipping_mode" not in st.session_state:
 if "shipping_qty_adjustments" not in st.session_state:
     st.session_state.shipping_qty_adjustments = {}
 
+if "shipping_saved_draft" not in st.session_state:
+    st.session_state.shipping_saved_draft = None
+
 
 def reset_shipping_scan():
     st.session_state.shipping_scanned_codes = []
@@ -573,6 +576,40 @@ if mode == "案件あり":
         st.warning("今回出荷数が1以上の商品がありません。")
     else:
         st.success("今回出荷数をもとに出荷指示書を作成できます。")
+
+    if st.session_state.shipping_saved_draft:
+        st.info(f"一時保存あり：{st.session_state.shipping_saved_draft['saved_at']}")
+
+    col_save1, col_save2, col_save3 = st.columns(3)
+
+    with col_save1:
+        if st.button("💾 一時保存"):
+            st.session_state.shipping_saved_draft = {
+                "project_id": project_id,
+                "scanned_codes": st.session_state.shipping_scanned_codes.copy(),
+                "qty_adjustments": st.session_state.shipping_qty_adjustments.copy(),
+                "saved_at": datetime.now().strftime("%Y/%m/%d %H:%M:%S")
+            }
+            st.success("一時保存しました。")
+
+    with col_save2:
+        if st.button("📂 一時保存を復元"):
+            saved = st.session_state.shipping_saved_draft
+
+            if not saved:
+                st.warning("一時保存データがありません。")
+            elif saved["project_id"] != project_id:
+                st.warning("選択中の案件と一時保存データの案件が違います。")
+            else:
+                st.session_state.shipping_scanned_codes = saved["scanned_codes"].copy()
+                st.session_state.shipping_qty_adjustments = saved["qty_adjustments"].copy()
+                st.success("一時保存データを復元しました。")
+                st.rerun()
+
+    with col_save3:
+        if st.button("🗑 一時保存クリア"):
+            st.session_state.shipping_saved_draft = None
+            st.success("一時保存をクリアしました。")
 
     st.write("---")
 
