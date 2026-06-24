@@ -339,24 +339,20 @@ if st.button("変更したステータスを保存"):
                     current_stock = item["total_qty"]
 
                     conn.execute("""
-                        INSERT INTO stock_logs (
+                        INSERT INTO stock_logs(
                             project_id,
                             item_id,
-                            change_type,
                             qty,
-                            memo,
-                            username,
-                            created_at
+                            type,
+                            username
                         )
-                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                        VALUES (?, ?, ?, ?, ?)
                     """, (
                         project_id,
                         item["id"],
-                        "出庫",
                         -current_stock,
-                        "案件完了による在庫ゼロ処理",
-                        st.session_state.username,
-                        datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        "出庫",
+                        st.session_state.username
                     ))
 
                     zero_item_count += 1
