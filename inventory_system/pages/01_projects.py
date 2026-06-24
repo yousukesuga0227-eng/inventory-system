@@ -239,6 +239,77 @@ st.dataframe(
     width="stretch",
     hide_index=True
 )
+st.write("---")
+
+# =====================
+# 案件ステータス変更
+# =====================
+st.subheader("案件ステータス変更")
+
+STATUS_OPTIONS = [
+    "未着荷",
+    "入庫済",
+    "出荷待ち",
+    "出荷済",
+    "完了"
+]
+
+if not rows:
+    st.info("変更できる案件がありません")
+else:
+    project_options = {
+        f'{row["code"]} / {row["name"]} / 現在：{row["status"]}': row
+        for row in rows
+    }
+
+    selected_project_label = st.selectbox(
+        "ステータスを変更する案件",
+        list(project_options.keys())
+    )
+
+    selected_project = project_options[selected_project_label]
+
+    current_status = selected_project["status"] or "未着荷"
+
+    if current_status in STATUS_OPTIONS:
+        status_index = STATUS_OPTIONS.index(current_status)
+    else:
+        status_index = 0
+
+    new_status = st.selectbox(
+        "新しい状態",
+        STATUS_OPTIONS,
+        index=status_index
+    )
+
+    if st.button("ステータス更新"):
+
+        if new_status == current_status:
+            st.info("状態は変更されていません")
+
+        else:
+            conn.execute("""
+                UPDATE projects
+                SET status = ?
+                WHERE id = ?
+            """, (
+                new_status,
+                selected_project["id"]
+            ))
+
+            conn.commit()
+
+            log_action(
+                st.session_state.username,
+                "案件ステータス変更",
+                "projects",
+                selected_project["id"],
+                selected_project["name"],
+                f"状態: {current_status} → {new_status}"
+            )
+
+            st.success("案件ステータスを更新しました")
+            st.rerun()
 
 st.write("---")
 
