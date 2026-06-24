@@ -234,18 +234,6 @@ for row in rows:
         "状態": row["status"]
     })
 
-st.dataframe(
-    project_list,
-    width="stretch",
-    hide_index=True
-)
-st.write("---")
-
-# =====================
-# 案件ステータス変更
-# =====================
-st.subheader("案件ステータス変更")
-
 STATUS_OPTIONS = [
     "未着荷",
     "入庫済",
@@ -254,62 +242,74 @@ STATUS_OPTIONS = [
     "完了"
 ]
 
-if not rows:
-    st.info("変更できる案件がありません")
-else:
-    project_options = {
-        f'{row["code"]} / {row["name"]} / 現在：{row["status"]}': row
+edited_projects = st.data_editor(
+    project_list,
+    width="stretch",
+    hide_index=True,
+    disabled=[
+        "ID",
+        "企業コード",
+        "企業名",
+        "案件コード",
+        "案件名",
+        "入庫予定",
+        "出荷予定",
+    ],
+    column_config={
+        "状態": st.column_config.SelectboxColumn(
+            "状態",
+            options=STATUS_OPTIONS,
+            required=True
+        )
+    },
+    key="project_status_editor"
+)
+
+if st.button("変更したステータスを保存"):
+
+    changed_count = 0
+
+    original_map = {
+        row["id"]: row["status"]
         for row in rows
     }
 
-    selected_project_label = st.selectbox(
-        "ステータスを変更する案件",
-        list(project_options.keys())
-    )
+    for edited_row in edited_projects:
 
-    selected_project = project_options[selected_project_label]
+        project_id = edited_row["ID"]
+        new_status = edited_row["状態"]
+        old_status = original_map.get(project_id)
 
-    current_status = selected_project["status"] or "未着荷"
+        if new_status != old_status:
 
-    if current_status in STATUS_OPTIONS:
-        status_index = STATUS_OPTIONS.index(current_status)
-    else:
-        status_index = 0
-
-    new_status = st.selectbox(
-        "新しい状態",
-        STATUS_OPTIONS,
-        index=status_index
-    )
-
-    if st.button("ステータス更新"):
-
-        if new_status == current_status:
-            st.info("状態は変更されていません")
-
-        else:
             conn.execute("""
                 UPDATE projects
                 SET status = ?
                 WHERE id = ?
             """, (
                 new_status,
-                selected_project["id"]
+                project_id
             ))
-
-            conn.commit()
 
             log_action(
                 st.session_state.username,
                 "案件ステータス変更",
                 "projects",
-                selected_project["id"],
-                selected_project["name"],
-                f"状態: {current_status} → {new_status}"
+                project_id,
+                edited_row["案件名"],
+                f"状態: {old_status} → {new_status}"
             )
 
-            st.success("案件ステータスを更新しました")
-            st.rerun()
+            changed_count += 1
+
+    conn.commit()
+
+    if changed_count > 0:
+        st.success(f"{changed_count}件のステータスを更新しました")
+        st.rerun()
+    else:
+        st.info("変更はありません")
+
 
 st.write("---")
 
