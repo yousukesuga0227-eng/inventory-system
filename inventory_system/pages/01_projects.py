@@ -317,41 +317,46 @@ if st.button("変更したステータスを保存"):
                 and old_status != "完了"
             ):
                 items = conn.execute("""
-                    SELECT id, name, quantity
-                    FROM items
-                    WHERE project_id = ?
-                    AND COALESCE(is_hidden, FALSE) = FALSE
-                    AND quantity > 0
+                    SELECT
+                        i.id,
+                        i.name,
+                        COALESCE(SUM(s.qty), 0) AS total_qty
+                    FROM items i
+                    LEFT JOIN stock_logs s
+                        ON s.item_id = i.id
+                        AND s.project_id = i.project_id
+                    WHERE i.project_id = ?
+                    AND COALESCE(i.is_active, TRUE) = TRUE
+                    GROUP BY
+                        i.id,
+                        i.name
+                    HAVING COALESCE(SUM(s.qty), 0) > 0
                 """, (
                     project_id,
                 )).fetchall()
 
                 for item in items:
+                    current_stock = item["total_qty"]
+
                     conn.execute("""
                         INSERT INTO stock_logs (
+                            project_id,
                             item_id,
                             change_type,
-                            quantity,
+                            qty,
                             memo,
                             username,
                             created_at
                         )
-                        VALUES (?, ?, ?, ?, ?, ?)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
                     """, (
+                        project_id,
                         item["id"],
                         "出庫",
-                        item["quantity"],
+                        -current_stock,
                         "案件完了による在庫ゼロ処理",
                         st.session_state.username,
                         datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    ))
-
-                    conn.execute("""
-                        UPDATE items
-                        SET quantity = 0
-                        WHERE id = ?
-                    """, (
-                        item["id"],
                     ))
 
                     zero_item_count += 1
