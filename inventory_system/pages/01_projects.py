@@ -317,11 +317,11 @@ if st.button("変更したステータスを保存"):
                 and old_status != "完了"
             ):
                 items = conn.execute("""
-                    SELECT id, name, stock_quantity
+                    SELECT id, name, quantity
                     FROM items
                     WHERE project_id = ?
-                      AND COALESCE(is_hidden, FALSE) = FALSE
-                      AND stock_quantity > 0
+                    AND COALESCE(is_hidden, FALSE) = FALSE
+                    AND quantity > 0
                 """, (
                     project_id,
                 )).fetchall()
@@ -340,7 +340,7 @@ if st.button("変更したステータスを保存"):
                     """, (
                         item["id"],
                         "出庫",
-                        item["stock_quantity"],
+                        item["quantity"],
                         "案件完了による在庫ゼロ処理",
                         st.session_state.username,
                         datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -348,7 +348,7 @@ if st.button("変更したステータスを保存"):
 
                     conn.execute("""
                         UPDATE items
-                        SET stock_quantity = 0
+                        SET quantity = 0
                         WHERE id = ?
                     """, (
                         item["id"],
