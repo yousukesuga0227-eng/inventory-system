@@ -265,9 +265,15 @@ edited_projects = st.data_editor(
     key="project_status_editor"
 )
 
+zero_stock_on_complete = st.checkbox(
+    "ステータスを『完了』にした案件の在庫を0にする",
+    value=False
+)
+
 if st.button("変更したステータスを保存"):
 
     changed_count = 0
+    zero_item_count = 0
 
     original_map = {
         row["id"]: row["status"]
@@ -302,10 +308,64 @@ if st.button("変更したステータスを保存"):
 
             changed_count += 1
 
+            # =====================
+            # 完了時に在庫0処理
+            # =====================
+            if (
+                zero_stock_on_complete
+                and new_status == "完了"
+                and old_status != "完了"
+            ):
+                items = conn.execute("""
+                    SELECT id, name, stock_quantity
+                    FROM items
+                    WHERE project_id = ?
+                      AND COALESCE(is_hidden, FALSE) = FALSE
+                      AND stock_quantity > 0
+                """, (
+                    project_id,
+                )).fetchall()
+
+                for item in items:
+                    conn.execute("""
+                        INSERT INTO stock_logs (
+                            item_id,
+                            change_type,
+                            quantity,
+                            memo,
+                            username,
+                            created_at
+                        )
+                        VALUES (?, ?, ?, ?, ?, ?)
+                    """, (
+                        item["id"],
+                        "出庫",
+                        item["stock_quantity"],
+                        "案件完了による在庫ゼロ処理",
+                        st.session_state.username,
+                        datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    ))
+
+                    conn.execute("""
+                        UPDATE items
+                        SET stock_quantity = 0
+                        WHERE id = ?
+                    """, (
+                        item["id"],
+                    ))
+
+                    zero_item_count += 1
+
     conn.commit()
 
     if changed_count > 0:
-        st.success(f"{changed_count}件のステータスを更新しました")
+        if zero_item_count > 0:
+            st.success(
+                f"{changed_count}件のステータスを更新し、{zero_item_count}商品の在庫を0にしました"
+            )
+        else:
+            st.success(f"{changed_count}件のステータスを更新しました")
+
         st.rerun()
     else:
         st.info("変更はありません")
