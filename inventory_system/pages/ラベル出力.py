@@ -521,6 +521,52 @@ def make_png_zip(items):
     return zip_buffer.getvalue()
 
 
+def create_remote_print_jobs(items, quantity_mode, fixed_count):
+    conn = get_connection()
+
+    try:
+        for item in items:
+            if quantity_mode == "出荷数分印刷":
+                qty = int(item.get("required_quantity") or 1)
+            else:
+                qty = int(fixed_count)
+
+            conn.execute(
+                """
+                INSERT INTO print_jobs (
+                    item_id,
+                    project_id,
+                    item_name,
+                    item_code,
+                    project_name,
+                    company_name,
+                    shipping_date,
+                    quantity,
+                    requested_by
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    item.get("item_id"),
+                    selected_project_id,
+                    item.get("item_name"),
+                    item.get("item_code"),
+                    item.get("project_name"),
+                    item.get("company_name"),
+                    item.get("shipping_date"),
+                    qty,
+                    st.session_state.get("username", "unknown"),
+                )
+            )
+
+        conn.commit()
+
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
 # =========================
 # QL-820 直接印刷
 # =========================
@@ -733,7 +779,7 @@ if not selected_items:
 
 now = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-col1, col2, col3 = st.columns(3)
+col1, col2, col3, col4 = st.columns(4)
 
 with col1:
     pdf_bytes = make_label_pdf(selected_items)
@@ -794,5 +840,22 @@ with col3:
             st.error("QL-820への直接印刷に失敗しました。")
             st.exception(e)
 
+with col4:
+    if st.button(
+        "🦈 倉庫プリンターへ遠隔印刷",
+        use_container_width=True
+    ):
+        try:
+            create_remote_print_jobs(
+                selected_items,
+                print_mode,
+                print_count
+            )
+
+            st.success("倉庫プリンターへ印刷予約しました 🦈🖨️")
+
+        except Exception as e:
+            st.error("遠隔印刷予約に失敗しました。")
+            st.exception(e)
 
 st.divider()

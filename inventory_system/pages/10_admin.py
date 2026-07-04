@@ -465,15 +465,17 @@ if st.session_state.get("show_black_box", False):
 
     data = []
 
-    for log in logs:
-        data.append({
-            "ユーザーID": log["username"],
-            "権限": log["role"],
-            "ログイン日時": log["login_at"],
-        })
+for log in logs:
 
-    st.dataframe(
-        data,
-        use_container_width=True,
-        hide_index=True
-    )
+    dt = log["login_at"]
+
+    # datetime型なら
+    if isinstance(dt, datetime):
+        dt = dt + timedelta(hours=9)
+        dt = dt.strftime("%Y/%m/%d %H:%M:%S")
+
+    data.append({
+        "ユーザーID": log["username"],
+        "権限": log["role"],
+        "ログイン日時": dt,
+    })
