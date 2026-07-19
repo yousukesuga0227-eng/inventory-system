@@ -1,6 +1,7 @@
 import streamlit as st
 from database import get_connection
 from auth import check_login
+from barcode_serials import normalize_scanned_barcode, split_unit_barcode
 
 check_login()
 conn = get_connection()
@@ -90,29 +91,15 @@ barcode = st.text_input(
 barcode_item = None
 
 if barcode:
-    clean_barcode = barcode.strip()
+    clean_barcode = normalize_scanned_barcode(barcode)
+    base_code, unit_number = split_unit_barcode(clean_barcode)
 
-    # 商品検索処理
-    # barcode_item = ...
-
-if st.button("入出庫登録"):
-    # 登録処理
-    # conn.commit()
-
-    st.success("入出庫を登録しました。")
-
-    # 入力欄を空にする
-    st.session_state.barcode_input = ""
-    st.rerun()
-        
-
-    # SHARK形式 案件コード_商品コード にも対応
-    if "_" in clean_barcode:
-        clean_barcode = clean_barcode.split("_")[-1]
-
-    if clean_barcode in code_map:
-        barcode_item = code_map[clean_barcode]
+    if base_code in code_map:
+        barcode_item = code_map[base_code]
         st.success(f"バーコード一致：{barcode_item}")
+
+        if unit_number is not None:
+            st.caption(f"個体No.：{unit_number:03d}")
     else:
         st.warning("バーコードに一致する商品がありません")
 

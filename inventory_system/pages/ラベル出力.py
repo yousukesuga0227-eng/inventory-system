@@ -23,6 +23,7 @@ from brother_ql.conversion import convert
 from brother_ql.backends.helpers import send
 
 from database import get_connection
+from barcode_serials import MAX_UNIT_NUMBER, make_unit_barcode
 
 
 st.set_page_config(
@@ -186,6 +187,55 @@ def safe_filename(text):
     return text.strip() or "item"
 
 
+def expand_label_items(
+    items,
+    quantity_mode,
+    fixed_count=1,
+    start_serial=1
+):
+    """
+    商品小口数または任意枚数を、個体連番付きのラベルデータへ展開する。
+
+    例：1001-2606-0007 → 1001-2606-0007-001
+    """
+    expanded_items = []
+    start_serial = int(start_serial)
+
+    for item in items:
+        if quantity_mode == "出荷数分印刷":
+            quantity = max(1, int(item.get("required_quantity") or 1))
+            item_start_serial = 1
+        else:
+            quantity = max(1, int(fixed_count))
+            item_start_serial = start_serial
+
+        last_serial = item_start_serial + quantity - 1
+
+        if last_serial > MAX_UNIT_NUMBER:
+            raise ValueError(
+                f"個体連番は{MAX_UNIT_NUMBER:03d}までです。"
+                f"開始番号または枚数を減らしてください。"
+            )
+
+        required_quantity = max(
+            1,
+            int(item.get("required_quantity") or quantity)
+        )
+        unit_total = max(required_quantity, last_serial)
+
+        for unit_number in range(item_start_serial, last_serial + 1):
+            label_item = dict(item)
+            label_item["barcode_value"] = make_unit_barcode(
+                item.get("item_code"),
+                unit_number
+            )
+            label_item["unit_number"] = unit_number
+            label_item["unit_total"] = unit_total
+            expanded_items.append(label_item)
+
+    return expanded_items
+
+
 # =========================
 # ラベル基本設定
 # =========================
@@ -304,6 +354,13 @@ def make_label_png(item):
         font_small = ImageFont.load_default()
 
     item_code = str(item.get("item_code", "") or "")
+    barcode_value = str(
+        item.get("barcode_value")
+        or item_code
+        or ""
+    )
+    unit_number = item.get("unit_number")
+    unit_total = item.get("unit_total")
     item_name = str(item.get("item_name", "") or "")
     project_name = str(item.get("project_name", "") or "")
 
@@ -419,11 +476,24 @@ def make_label_png(item):
     # =========================
 
     company_text = f"企業名：{company_name}"
+    unit_text = ""
+
+    if unit_number is not None:
+        if unit_total is not None:
+            unit_text = f"個体No. {int(unit_number):03d}/{int(unit_total):03d}"
+        else:
+            unit_text = f"個体No. {int(unit_number):03d}"
+
+    company_max_width = usable_width
+
+    if unit_text:
+        company_max_width = max(260, usable_width - 215)
+
     company_font = fit_text(
         draw,
         company_text,
         font_path,
-        usable_width,
+        company_max_width,
         24,
         18
     )
@@ -435,11 +505,29 @@ def make_label_png(item):
         font=company_font
     )
 
+    if unit_text:
+        unit_font = fit_text(
+            draw,
+            unit_text,
+            font_path,
+            205,
+            22,
+            16
+        )
+        unit_bbox = draw.textbbox((0, 0), unit_text, font=unit_font)
+        unit_width = unit_bbox[2] - unit_bbox[0]
+        draw.text(
+            (width_px - right_margin - unit_width, y),
+            unit_text,
+            fill="black",
+            font=unit_font
+        )
+
     # =========================
     # バーコード
     # =========================
-    if item_code:
-        barcode_img = make_barcode_png(item_code)
+    if barcode_value:
+        barcode_img = make_barcode_png(barcode_value)
 
         # 横幅をラベルいっぱいに近づける
         target_w = width_px - 20
@@ -505,7 +593,11 @@ def make_png_zip(items):
 
     with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
         for item in items:
-            item_code = str(item.get("item_code", "") or "no_code")
+            item_code = str(
+                item.get("barcode_value")
+                or item.get("item_code")
+                or "no_code"
+            )
             item_name = str(item.get("item_name", "") or "item")
 
             img = make_label_png(item)
@@ -521,16 +613,11 @@ def make_png_zip(items):
     return zip_buffer.getvalue()
 
 
-def create_remote_print_jobs(items, quantity_mode, fixed_count):
+def create_remote_print_jobs(items):
     conn = get_connection()
 
     try:
         for item in items:
-            if quantity_mode == "出荷数分印刷":
-                qty = int(item.get("required_quantity") or 1)
-            else:
-                qty = int(fixed_count)
-
             conn.execute(
                 """
                 INSERT INTO print_jobs (
@@ -550,11 +637,11 @@ def create_remote_print_jobs(items, quantity_mode, fixed_count):
                     item.get("item_id"),
                     selected_project_id,
                     item.get("item_name"),
-                    item.get("item_code"),
+                    item.get("barcode_value") or item.get("item_code"),
                     item.get("project_name"),
                     item.get("company_name"),
                     item.get("shipping_date"),
-                    qty,
+                    1,
                     st.session_state.get("username", "unknown"),
                 )
             )
@@ -736,15 +823,37 @@ print_mode = st.radio(
 )
 
 print_count = 1
+start_serial = 1
 
 if print_mode == "任意枚数印刷":
     print_count = st.number_input(
-        "同じラベルを印刷する枚数",
+        "商品ごとの発行枚数",
         min_value=1,
         max_value=100,
         value=1,
         step=1
     )
+
+    start_serial = st.number_input(
+        "個体連番の開始番号",
+        min_value=1,
+        max_value=MAX_UNIT_NUMBER - int(print_count) + 1,
+        value=1,
+        step=1,
+        help="再発行するときは、印刷したい個体番号を指定します。"
+    )
+
+label_items = expand_label_items(
+    selected_items,
+    print_mode,
+    fixed_count=print_count,
+    start_serial=start_serial
+)
+
+st.info(
+    f"出力予定：{len(label_items)}枚 / "
+    "バーコード末尾は個体ごとに001から連番になります。"
+)
 
 with st.expander("選択商品の確認", expanded=False):
     for item in selected_items:
@@ -759,8 +868,8 @@ with st.expander("選択商品の確認", expanded=False):
 # プレビュー
 # =========================
 with st.expander("ラベルプレビュー", expanded=False):
-    if selected_items:
-        preview_img = make_label_png(selected_items[0])
+    if label_items:
+        preview_img = make_label_png(label_items[0])
         st.image(
             preview_img,
             caption="選択中の先頭商品のラベルプレビュー",
@@ -782,7 +891,7 @@ now = datetime.now().strftime("%Y%m%d_%H%M%S")
 col1, col2, col3, col4 = st.columns(4)
 
 with col1:
-    pdf_bytes = make_label_pdf(selected_items)
+    pdf_bytes = make_label_pdf(label_items)
 
     st.download_button(
         label="📄 ラベルPDFをダウンロード",
@@ -793,7 +902,7 @@ with col1:
     )
 
 with col2:
-    zip_bytes = make_png_zip(selected_items)
+    zip_bytes = make_png_zip(label_items)
 
     st.download_button(
         label="🖼️ ラベルPNGをZIPでダウンロード",
@@ -814,20 +923,8 @@ with col3:
                 st.stop()
 
             with st.spinner("QL-820へ印刷データを送信中..."):
-                print_items = []
-
-                for item in selected_items:
-
-                    if print_mode == "出荷数分印刷":
-                        qty = int(item.get("required_quantity") or 1)
-                    else:
-                        qty = int(print_count)
-
-                    for _ in range(qty):
-                        print_items.append(item)
-
                 printed_count = print_labels_to_ql820(
-                    print_items,
+                    label_items,
                     printer_ip=ql820_ip.strip(),
                     label_size=ql820_label_size,
                     red=ql820_red,
@@ -847,9 +944,7 @@ with col4:
     ):
         try:
             create_remote_print_jobs(
-                selected_items,
-                print_mode,
-                print_count
+                label_items
             )
 
             st.success("倉庫プリンターへ印刷予約しました 🦈🖨️")

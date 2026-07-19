@@ -18,6 +18,7 @@ from brother_ql.conversion import convert
 from brother_ql.backends.helpers import send
 
 from database import get_connection
+from barcode_serials import split_unit_barcode
 
 
 # =========================================================
@@ -276,6 +277,7 @@ def make_label_png(job):
     item_code = str(
         job.get("item_code", "") or ""
     )
+    _, unit_number = split_unit_barcode(item_code)
 
     item_name = str(
         job.get("item_name", "") or ""
@@ -436,11 +438,21 @@ def make_label_png(job):
         f"企業名：{company_name}"
     )
 
+    unit_text = ""
+
+    if unit_number is not None:
+        unit_text = f"個体No. {unit_number:03d}"
+
+    company_max_width = usable_width
+
+    if unit_text:
+        company_max_width = max(260, usable_width - 165)
+
     company_font = fit_text(
         draw,
         company_text,
         FONT_PATH,
-        usable_width,
+        company_max_width,
         24,
         18
     )
@@ -451,6 +463,33 @@ def make_label_png(job):
         fill="black",
         font=company_font
     )
+
+    if unit_text:
+        unit_font = fit_text(
+            draw,
+            unit_text,
+            FONT_PATH,
+            155,
+            22,
+            16
+        )
+        unit_bbox = draw.textbbox(
+            (0, 0),
+            unit_text,
+            font=unit_font
+        )
+        unit_width = unit_bbox[2] - unit_bbox[0]
+        draw.text(
+            (
+                width_px
+                - right_margin
+                - unit_width,
+                y
+            ),
+            unit_text,
+            fill="black",
+            font=unit_font
+        )
 
     # =========================
     # バーコード

@@ -1,6 +1,7 @@
 import streamlit as st
 from database import get_connection
 from auth import check_login
+from barcode_serials import normalize_scanned_barcode, split_unit_barcode
 
 check_login()
 
@@ -17,6 +18,8 @@ barcode = st.text_input(
 )
 
 if barcode:
+    clean_barcode = normalize_scanned_barcode(barcode)
+    base_code, unit_number = split_unit_barcode(clean_barcode)
 
     query = """
     SELECT
@@ -36,7 +39,7 @@ if barcode:
 
     row = conn.execute(
         query,
-        (barcode,)
+        (base_code,)
     ).fetchone()
 
     if row:
@@ -44,6 +47,10 @@ if barcode:
         st.success("商品発見")
 
         st.write(f"商品コード: {row['item_code']}")
+
+        if unit_number is not None:
+            st.write(f"個体No.: {unit_number:03d}")
+
         st.write(f"商品名: {row['item_name']}")
         st.write(f"案件コード: {row['project_code']}")
         st.write(f"案件名: {row['project_name']}")

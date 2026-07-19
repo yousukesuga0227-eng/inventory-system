@@ -20,6 +20,12 @@ from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.lib.styles import getSampleStyleSheet
 from collections import Counter
+from barcode_serials import (
+    format_unit_numbers,
+    is_unit_barcode,
+    normalize_scanned_barcode,
+    split_unit_barcode,
+)
 
 check_login()
 conn = get_connection()
@@ -63,24 +69,56 @@ if "shipping_qty_adjustments" not in st.session_state:
 if "shipping_saved_draft" not in st.session_state:
     st.session_state.shipping_saved_draft = None
 
+if "shipping_scan_notice" not in st.session_state:
+    st.session_state.shipping_scan_notice = None
+
 
 def reset_shipping_scan():
     st.session_state.shipping_scanned_codes = []
     st.session_state.shipping_barcode_input = ""
     st.session_state.shipping_qty_adjustments = {}
+    st.session_state.shipping_scan_notice = None
 
 
 def add_barcode():
-    barcode_text = st.session_state.shipping_barcode_input.strip()
+    barcode_text = normalize_scanned_barcode(
+        st.session_state.shipping_barcode_input
+    )
 
     if not barcode_text:
         return
 
-    if "_" in barcode_text:
-        barcode_text = barcode_text.split("_")[-1]
+    if (
+        is_unit_barcode(barcode_text)
+        and barcode_text in st.session_state.shipping_scanned_codes
+    ):
+        st.session_state.shipping_scan_notice = (
+            "error",
+            f"重複読取：{barcode_text} はすでに読み取り済みです。"
+        )
+        st.session_state.shipping_barcode_input = ""
+        return
 
     st.session_state.shipping_scanned_codes.append(barcode_text)
     st.session_state.shipping_barcode_input = ""
+    st.session_state.shipping_scan_notice = (
+        "success",
+        f"読取完了：{barcode_text}"
+    )
+
+
+def show_scan_notice():
+    notice = st.session_state.shipping_scan_notice
+
+    if not notice:
+        return
+
+    notice_type, message = notice
+
+    if notice_type == "error":
+        st.error(message)
+    else:
+        st.success(message)
 
 
 # =====================
@@ -427,12 +465,77 @@ if mode == "案件あり":
         on_change=add_barcode
     )
 
+    show_scan_notice()
+
     if st.button("読み取りリセット"):
         reset_shipping_scan()
         st.rerun()
 
     scanned_codes = st.session_state.shipping_scanned_codes
-    scan_counter = Counter(scanned_codes)
+    valid_results = []
+    invalid_results = []
+    valid_base_codes = []
+    scanned_units_by_item = {
+        code: set()
+        for code in item_map
+    }
+
+    for index, scanned_code in enumerate(scanned_codes, start=1):
+        base_code, unit_number = split_unit_barcode(scanned_code)
+
+        if base_code not in item_map:
+            invalid_results.append(
+                {
+                    "No.": index,
+                    "読取バーコード": scanned_code,
+                    "商品コード": base_code,
+                    "判定": "NG",
+                    "理由": "この案件の商品ではありません"
+                }
+            )
+            continue
+
+        required_qty = quantity_map[base_code]
+
+        if (
+            unit_number is not None
+            and not 1 <= unit_number <= required_qty
+        ):
+            invalid_results.append(
+                {
+                    "No.": index,
+                    "読取バーコード": scanned_code,
+                    "商品コード": base_code,
+                    "判定": "NG",
+                    "理由": (
+                        f"個体番号{unit_number:03d}は範囲外です。"
+                        f"有効範囲は001～{required_qty:03d}です"
+                    )
+                }
+            )
+            continue
+
+        valid_base_codes.append(base_code)
+
+        if unit_number is not None:
+            scanned_units_by_item[base_code].add(unit_number)
+
+        valid_results.append(
+            {
+                "No.": index,
+                "読取バーコード": scanned_code,
+                "商品コード": base_code,
+                "個体No.": (
+                    f"{unit_number:03d}"
+                    if unit_number is not None
+                    else "旧形式"
+                ),
+                "商品名": item_map[base_code],
+                "判定": "OK"
+            }
+        )
+
+    scan_counter = Counter(valid_base_codes)
 
     required_total = sum(quantity_map.values())
 
@@ -496,37 +599,28 @@ if mode == "案件あり":
         with col6:
             st.write(status)
 
+            scanned_units = scanned_units_by_item[code]
+
+            if scanned_units:
+                expected_units = set(range(1, required_qty + 1))
+                missing_units = expected_units - scanned_units
+
+                if missing_units:
+                    st.caption(
+                        "未読No.："
+                        + format_unit_numbers(missing_units)
+                    )
+                else:
+                    st.caption("個体番号：全数読取済み")
+            elif scanned_qty > 0:
+                st.caption("旧形式バーコードで読取")
+
         if ship_qty > 0:
             pdf_items.append(
                 {
                     "code": code,
                     "name": name,
                     "quantity": ship_qty
-                }
-            )
-
-    valid_results = []
-    invalid_results = []
-
-    for index, scanned_code in enumerate(scanned_codes, start=1):
-
-        if scanned_code in item_map:
-            valid_results.append(
-                {
-                    "No.": index,
-                    "商品コード": scanned_code,
-                    "商品名": item_map[scanned_code],
-                    "判定": "OK"
-                }
-            )
-        else:
-            invalid_results.append(
-                {
-                    "No.": index,
-                    "商品コード": scanned_code,
-                    "商品名": "",
-                    "判定": "NG",
-                    "理由": "この案件の商品ではありません"
                 }
             )
 
@@ -556,7 +650,8 @@ if mode == "案件あり":
                 st.write(ng["No."])
 
             with col2:
-                st.write(ng["商品コード"])
+                st.write(ng["読取バーコード"])
+                st.caption(ng["理由"])
 
             with col3:
                 if st.button("削除", key=f"delete_ng_{ng['No.']}"):
@@ -656,53 +751,89 @@ else:
         on_change=add_barcode
     )
 
+    show_scan_notice()
+
     if st.button("読み取りリセット"):
         reset_shipping_scan()
         st.rerun()
 
     scanned_codes = st.session_state.shipping_scanned_codes
-    scan_counter = Counter(scanned_codes)
-
     valid_items = {}
     invalid_results = []
+    valid_base_codes = []
+    scanned_units_by_item = {}
 
     for index, scanned_code in enumerate(scanned_codes, start=1):
+        base_code, unit_number = split_unit_barcode(scanned_code)
 
         item = conn.execute(
             """
             SELECT
                 code,
-                name
+                name,
+                COALESCE(required_quantity, 1) AS required_quantity
             FROM items
             WHERE code = ?
               AND COALESCE(is_active, TRUE) = TRUE
             LIMIT 1
             """,
-            (scanned_code,)
+            (base_code,)
         ).fetchone()
 
         if item:
             item = dict(item)
-            valid_items[scanned_code] = item["name"]
+            required_qty = int(item["required_quantity"])
+
+            if (
+                unit_number is not None
+                and not 1 <= unit_number <= required_qty
+            ):
+                invalid_results.append(
+                    {
+                        "No.": index,
+                        "読取バーコード": scanned_code,
+                        "商品コード": base_code,
+                        "判定": "NG",
+                        "理由": (
+                            f"個体番号{unit_number:03d}は範囲外です。"
+                            f"有効範囲は001～{required_qty:03d}です"
+                        )
+                    }
+                )
+                continue
+
+            valid_items[base_code] = item
+            valid_base_codes.append(base_code)
+
+            if unit_number is not None:
+                scanned_units_by_item.setdefault(base_code, set()).add(
+                    unit_number
+                )
         else:
             invalid_results.append(
                 {
                     "No.": index,
-                    "商品コード": scanned_code,
+                    "読取バーコード": scanned_code,
+                    "商品コード": base_code,
                     "判定": "NG",
                     "理由": "商品マスタに存在しません"
                 }
             )
 
+    scan_counter = Counter(valid_base_codes)
     valid_results = []
 
     for code, qty in scan_counter.items():
         if code in valid_items:
+            item = valid_items[code]
             valid_results.append(
                 {
                     "商品コード": code,
-                    "商品名": valid_items[code],
+                    "商品名": item["name"],
                     "数量": qty,
+                    "読取個体No.": format_unit_numbers(
+                        scanned_units_by_item.get(code, set())
+                    ),
                     "判定": "OK"
                 }
             )
