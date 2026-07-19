@@ -96,13 +96,21 @@ def row_to_dict(row, columns=None):
     if isinstance(row, dict):
         return row
 
-    try:
-        return dict(row)
-    except Exception:
-        if columns:
-            return dict(zip(columns, row))
+    # database.py の RowLike対応
+    if hasattr(row, "keys"):
+        return {
+            key: row[key]
+            for key in row.keys()
+        }
 
-    return row
+    if columns:
+        return dict(
+            zip(columns, row)
+        )
+
+    raise TypeError(
+        f"辞書へ変換できない行形式です: {type(row)}"
+    )
 
 
 def fetch_one(conn, query, params=None):

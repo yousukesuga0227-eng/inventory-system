@@ -14,6 +14,10 @@ DB_PATH = BASE_DIR / "data" / "inventory.db"
 def get_database_url():
     database_url = os.environ.get("DATABASE_URL")
 
+    print("=" * 60)
+    print("DATABASE_URL: 設定済み" if database_url else "DATABASE_URL: 未設定")
+    print("=" * 60)
+
     if database_url:
         return database_url
 
@@ -21,10 +25,11 @@ def get_database_url():
         import streamlit as st
 
         if "DATABASE_URL" in st.secrets:
+            print("Streamlit secrets を使用")
             return st.secrets["DATABASE_URL"]
 
-    except Exception:
-        pass
+    except Exception as e:
+        print("Secrets:", e)
 
     return None
 
