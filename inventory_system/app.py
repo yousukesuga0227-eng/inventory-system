@@ -448,6 +448,11 @@ pages = [
     st.Page("pages/07_item_search.py", title="商品検索", icon="🔍"),
     st.Page("pages/08_shipping_instruction.py", title="出荷指示書", icon="📄"),
     st.Page("pages/ラベル出力.py", title="ラベル出力", icon="🏷️"),
+    st.Page(
+    "pages/13_pallet_inventory.py",
+    title="パレット在庫管理",
+    icon="📦",
+),
     st.Page("pages/99_manual.py", title="ヘルプ", icon="❓"),
 ]
 
