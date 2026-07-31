@@ -2,7 +2,7 @@
 SHARK パレット管理テーブルの読み取り専用検証。
 
 アプリ起動時には CREATE / ALTER / DROP を実行しない。
-テーブルの作成・再作成は、同梱の REBUILD_PALLET_TABLES.py を
+テーブルの作成・再作成は、同梱のセットアップスクリプトを
 ユーザーが明示的に実行した場合だけ行う。
 """
 
@@ -29,6 +29,7 @@ _POSTGRES_EXPECTED_TYPES = {
     ("pallet_inventory", "company_id"): "integer",
     ("pallet_inventory", "project_id"): "integer",
     ("pallet_inventory", "item_id"): "integer",
+    ("pallet_inventory", "item_name"): "text",
     ("pallet_inventory", "initial_qty"): "integer",
     ("pallet_inventory", "current_qty"): "integer",
     ("pallet_inventory", "status"): "text",
@@ -48,6 +49,28 @@ _POSTGRES_EXPECTED_TYPES = {
     ("pallet_history", "username"): "text",
     ("pallet_history", "remarks"): "text",
     ("pallet_history", "created_at"): "timestamp with time zone",
+    ("pallet_receiving_plans", "id"): "bigint",
+    ("pallet_receiving_plans", "receipt_code"): "text",
+    ("pallet_receiving_plans", "receiving_date"): "date",
+    ("pallet_receiving_plans", "company_id"): "integer",
+    ("pallet_receiving_plans", "project_id"): "integer",
+    ("pallet_receiving_plans", "item_id"): "integer",
+    ("pallet_receiving_plans", "item_name"): "text",
+    ("pallet_receiving_plans", "pallet_count"): "integer",
+    ("pallet_receiving_plans", "qty_per_pallet"): "integer",
+    ("pallet_receiving_plans", "total_qty"): "integer",
+    ("pallet_receiving_plans", "status"): "text",
+    ("pallet_receiving_plans", "batch_code"): "text",
+    ("pallet_receiving_plans", "remarks"): "text",
+    ("pallet_receiving_plans", "created_by"): "text",
+    ("pallet_receiving_plans", "created_at"):
+        "timestamp with time zone",
+    ("pallet_receiving_plans", "updated_at"):
+        "timestamp with time zone",
+    ("pallet_receiving_plans", "confirmed_by"): "text",
+    ("pallet_receiving_plans", "confirmed_at"):
+        "timestamp with time zone",
+    ("pallet_receiving_plans", "is_deleted"): "boolean",
 }
 
 _SQLITE_EXPECTED_TYPES = {
@@ -59,6 +82,7 @@ _SQLITE_EXPECTED_TYPES = {
     ("pallet_inventory", "company_id"): "INTEGER",
     ("pallet_inventory", "project_id"): "INTEGER",
     ("pallet_inventory", "item_id"): "INTEGER",
+    ("pallet_inventory", "item_name"): "TEXT",
     ("pallet_inventory", "initial_qty"): "INTEGER",
     ("pallet_inventory", "current_qty"): "INTEGER",
     ("pallet_inventory", "status"): "TEXT",
@@ -78,7 +102,32 @@ _SQLITE_EXPECTED_TYPES = {
     ("pallet_history", "username"): "TEXT",
     ("pallet_history", "remarks"): "TEXT",
     ("pallet_history", "created_at"): "TEXT",
+    ("pallet_receiving_plans", "id"): "INTEGER",
+    ("pallet_receiving_plans", "receipt_code"): "TEXT",
+    ("pallet_receiving_plans", "receiving_date"): "TEXT",
+    ("pallet_receiving_plans", "company_id"): "INTEGER",
+    ("pallet_receiving_plans", "project_id"): "INTEGER",
+    ("pallet_receiving_plans", "item_id"): "INTEGER",
+    ("pallet_receiving_plans", "item_name"): "TEXT",
+    ("pallet_receiving_plans", "pallet_count"): "INTEGER",
+    ("pallet_receiving_plans", "qty_per_pallet"): "INTEGER",
+    ("pallet_receiving_plans", "total_qty"): "INTEGER",
+    ("pallet_receiving_plans", "status"): "TEXT",
+    ("pallet_receiving_plans", "batch_code"): "TEXT",
+    ("pallet_receiving_plans", "remarks"): "TEXT",
+    ("pallet_receiving_plans", "created_by"): "TEXT",
+    ("pallet_receiving_plans", "created_at"): "TEXT",
+    ("pallet_receiving_plans", "updated_at"): "TEXT",
+    ("pallet_receiving_plans", "confirmed_by"): "TEXT",
+    ("pallet_receiving_plans", "confirmed_at"): "TEXT",
+    ("pallet_receiving_plans", "is_deleted"): "INTEGER",
 }
+
+_TABLE_NAMES = (
+    "pallet_inventory",
+    "pallet_history",
+    "pallet_receiving_plans",
+)
 
 
 class PalletSchemaError(RuntimeError):
@@ -160,7 +209,9 @@ def _schema_error(issues):
     details = "\n".join(f"- {issue}" for issue in issues)
     return PalletSchemaError(
         "パレット用DBの定義が正しくありません。\n"
-        "同梱の REBUILD_PALLET_TABLES.py を一度だけ実行してください。\n"
+        "既存環境は INSTALL_PALLET_RECEIVING_PLANS.py を、\n"
+        "新規環境または空テーブルの再作成は "
+        "REBUILD_PALLET_TABLES.py を実行してください。\n"
         f"{details}"
     )
 
@@ -179,7 +230,8 @@ def _validate_postgres(conn):
             table_schema = CURRENT_SCHEMA()
             AND table_name IN (
                 'pallet_inventory',
-                'pallet_history'
+                'pallet_history',
+                'pallet_receiving_plans'
             )
         ORDER BY table_name, ordinal_position
         """
@@ -222,7 +274,7 @@ def _validate_postgres(conn):
                 f"（必要：{expected_type}）"
             )
 
-    for table_name in ("pallet_inventory", "pallet_history"):
+    for table_name in _TABLE_NAMES:
         actual = columns.get((table_name, "id"))
 
         if actual is None:
@@ -285,7 +337,7 @@ def _validate_postgres(conn):
 def _validate_sqlite(conn):
     columns = {}
 
-    for table_name in ("pallet_inventory", "pallet_history"):
+    for table_name in _TABLE_NAMES:
         cursor = conn.execute(f"PRAGMA table_info({table_name})")
 
         for row in cursor.fetchall():
@@ -313,7 +365,7 @@ def _validate_sqlite(conn):
                 f"（必要：{expected_type}）"
             )
 
-    for table_name in ("pallet_inventory", "pallet_history"):
+    for table_name in _TABLE_NAMES:
         id_column = columns.get((table_name, "id"))
 
         if id_column and id_column["primary_key"] != 1:

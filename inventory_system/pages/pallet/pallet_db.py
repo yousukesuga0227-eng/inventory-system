@@ -306,6 +306,7 @@ def create_pallet_batch(
     remarks="",
     pallet_codes=None,
     commit=True,
+    item_name="",
 ):
     """
     パレット一式を入庫登録する。
@@ -365,6 +366,33 @@ def create_pallet_batch(
     now = _now()
     normalized_location = str(location or "").strip()
     normalized_remarks = str(remarks or "").strip()
+    normalized_item_name = str(item_name or "").strip()
+
+    if item_id in ("", None):
+        normalized_item_id = None
+    else:
+        try:
+            normalized_item_id = int(item_id)
+        except (TypeError, ValueError) as exc:
+            raise PalletStockError(
+                "商品情報に不正な値があります。"
+            ) from exc
+
+    if not normalized_item_name and normalized_item_id is not None:
+        cursor = _execute(
+            conn,
+            "SELECT name FROM items WHERE id = ? LIMIT 1",
+            (normalized_item_id,),
+        )
+        item_row = _fetchone_dict(cursor)
+
+        if item_row is not None:
+            normalized_item_name = str(
+                item_row.get("name") or ""
+            ).strip()
+
+    if not normalized_item_name:
+        raise PalletStockError("商品名を入力してください。")
 
     try:
         for sequence, (quantity, planned_pallet_code) in enumerate(
@@ -384,6 +412,7 @@ def create_pallet_batch(
                     company_id,
                     project_id,
                     item_id,
+                    item_name,
                     initial_qty,
                     current_qty,
                     status,
@@ -394,7 +423,7 @@ def create_pallet_batch(
                     updated_at
                 )
                 VALUES (
-                    ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                     '保管中', ?, ?, ?, ?, ?
                 )
                 """,
@@ -405,7 +434,8 @@ def create_pallet_batch(
                     total_pallets,
                     company_id,
                     project_id,
-                    item_id,
+                    normalized_item_id,
+                    normalized_item_name,
                     quantity,
                     quantity,
                     normalized_location or None,
@@ -497,13 +527,29 @@ def _normalize_receiving_date(value):
 def _normalize_receiving_plan(plan):
     try:
         company_id = int(plan["company_id"])
-        item_id = int(plan["item_id"])
         pallet_count = int(plan["pallet_count"])
         qty_per_pallet = int(plan["qty_per_pallet"])
     except (KeyError, TypeError, ValueError) as exc:
         raise PalletStockError(
             "入庫予定の顧客・商品・数量に不正な値があります。"
         ) from exc
+
+    raw_item_id = plan.get("item_id")
+
+    if raw_item_id in ("", None):
+        item_id = None
+    else:
+        try:
+            item_id = int(raw_item_id)
+        except (TypeError, ValueError) as exc:
+            raise PalletStockError(
+                "入庫予定の商品情報に不正な値があります。"
+            ) from exc
+
+    item_name = str(plan.get("item_name") or "").strip()
+
+    if not item_name:
+        raise PalletStockError("商品名を入力してください。")
 
     if pallet_count < 1 or pallet_count > 1000:
         raise PalletStockError(
@@ -530,6 +576,7 @@ def _normalize_receiving_plan(plan):
         "company_id": company_id,
         "project_id": project_id,
         "item_id": item_id,
+        "item_name": item_name,
         "pallet_count": pallet_count,
         "qty_per_pallet": qty_per_pallet,
         "total_qty": pallet_count * qty_per_pallet,
@@ -540,9 +587,30 @@ def _normalize_receiving_plan(plan):
 def create_receiving_plans(conn, plans, username):
     """入庫予定を1件以上まとめて登録し、入庫管理番号を返す。"""
 
+    prepared_plans = []
+
+    for source_plan in plans:
+        plan = dict(source_plan)
+
+        if (
+            not str(plan.get("item_name") or "").strip()
+            and plan.get("item_id") not in ("", None)
+        ):
+            cursor = _execute(
+                conn,
+                "SELECT name FROM items WHERE id = ? LIMIT 1",
+                (plan["item_id"],),
+            )
+            item_row = _fetchone_dict(cursor)
+
+            if item_row is not None:
+                plan["item_name"] = item_row.get("name") or ""
+
+        prepared_plans.append(plan)
+
     normalized_plans = [
         _normalize_receiving_plan(plan)
-        for plan in plans
+        for plan in prepared_plans
     ]
 
     if not normalized_plans:
@@ -563,6 +631,7 @@ def create_receiving_plans(conn, plans, username):
                     company_id,
                     project_id,
                     item_id,
+                    item_name,
                     pallet_count,
                     qty_per_pallet,
                     total_qty,
@@ -573,7 +642,7 @@ def create_receiving_plans(conn, plans, username):
                     updated_at
                 )
                 VALUES (
-                    ?, ?, ?, ?, ?, ?, ?, ?,
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?,
                     '入庫待ち', ?, ?, ?, ?
                 )
                 """,
@@ -583,6 +652,7 @@ def create_receiving_plans(conn, plans, username):
                     plan["company_id"],
                     plan["project_id"],
                     plan["item_id"],
+                    plan["item_name"],
                     plan["pallet_count"],
                     plan["qty_per_pallet"],
                     plan["total_qty"],
@@ -624,6 +694,7 @@ def create_receiving_plan(
     qty_per_pallet,
     username,
     remarks="",
+    item_name="",
 ):
     """入庫予定を1件登録する。"""
 
@@ -635,6 +706,7 @@ def create_receiving_plan(
                 "company_id": company_id,
                 "project_id": project_id,
                 "item_id": item_id,
+                "item_name": item_name,
                 "pallet_count": pallet_count,
                 "qty_per_pallet": qty_per_pallet,
                 "remarks": remarks,
@@ -663,6 +735,7 @@ def get_receiving_plan_by_code(conn, receipt_or_pallet_code):
             rp.company_id,
             rp.project_id,
             rp.item_id,
+            rp.item_name AS entered_item_name,
             rp.pallet_count,
             rp.qty_per_pallet,
             rp.total_qty,
@@ -679,7 +752,7 @@ def get_receiving_plan_by_code(conn, receipt_or_pallet_code):
             p.code AS project_code,
             p.name AS project_name,
             i.code AS item_code,
-            i.name AS item_name
+            COALESCE(NULLIF(rp.item_name, ''), i.name) AS item_name
         FROM pallet_receiving_plans rp
         LEFT JOIN companies c
             ON c.id = rp.company_id
@@ -719,6 +792,7 @@ def list_receiving_plans(conn, status="入庫待ち", limit=500):
             rp.company_id,
             rp.project_id,
             rp.item_id,
+            rp.item_name AS entered_item_name,
             rp.pallet_count,
             rp.qty_per_pallet,
             rp.total_qty,
@@ -734,7 +808,7 @@ def list_receiving_plans(conn, status="入庫待ち", limit=500):
             p.code AS project_code,
             p.name AS project_name,
             i.code AS item_code,
-            i.name AS item_name
+            COALESCE(NULLIF(rp.item_name, ''), i.name) AS item_name
         FROM pallet_receiving_plans rp
         LEFT JOIN companies c
             ON c.id = rp.company_id
@@ -840,6 +914,7 @@ def confirm_receiving_plan(conn, receipt_or_pallet_code, username):
             remarks=plan["remarks"] or "",
             pallet_codes=pallet_codes,
             commit=False,
+            item_name=plan["item_name"],
         )
         cursor = _execute(
             conn,
@@ -917,7 +992,7 @@ def get_pallet_by_code(conn, pallet_code):
             p.code AS project_code,
             p.name AS project_name,
             i.code AS item_code,
-            i.name AS item_name
+            COALESCE(NULLIF(pi.item_name, ''), i.name) AS item_name
         FROM pallet_inventory pi
         LEFT JOIN companies c
             ON c.id = pi.company_id
@@ -962,7 +1037,7 @@ def get_batch_pallets(conn, batch_code):
             p.code AS project_code,
             p.name AS project_name,
             i.code AS item_code,
-            i.name AS item_name
+            COALESCE(NULLIF(pi.item_name, ''), i.name) AS item_name
         FROM pallet_inventory pi
         LEFT JOIN companies c
             ON c.id = pi.company_id
@@ -1001,7 +1076,7 @@ def list_editable_pallet_batches(conn):
             MAX(c.name) AS company_name,
             MAX(p.name) AS project_name,
             MAX(i.code) AS item_code,
-            MAX(i.name) AS item_name,
+            MAX(COALESCE(NULLIF(pi.item_name, ''), i.name)) AS item_name,
             COUNT(*) AS pallet_count,
             SUM(pi.initial_qty) AS total_qty
         FROM pallet_inventory pi
@@ -1098,6 +1173,7 @@ def update_pallet_batch(
     project_id,
     item_id,
     allocations,
+    item_name="",
 ):
     """
     未出庫の登録Noについて、荷主・商品・数量内訳を修正する。
@@ -1119,6 +1195,23 @@ def update_pallet_batch(
         )
 
     now = _now()
+    normalized_item_name = str(item_name or "").strip()
+
+    if not normalized_item_name and item_id not in ("", None):
+        cursor = _execute(
+            conn,
+            "SELECT name FROM items WHERE id = ? LIMIT 1",
+            (item_id,),
+        )
+        item_row = _fetchone_dict(cursor)
+
+        if item_row is not None:
+            normalized_item_name = str(
+                item_row.get("name") or ""
+            ).strip()
+
+    if not normalized_item_name:
+        raise PalletStockError("商品名を入力してください。")
 
     try:
         for row, quantity in zip(rows, quantities):
@@ -1134,6 +1227,7 @@ def update_pallet_batch(
                     company_id = ?,
                     project_id = ?,
                     item_id = ?,
+                    item_name = ?,
                     initial_qty = ?,
                     current_qty = ?,
                     updated_at = ?
@@ -1148,6 +1242,7 @@ def update_pallet_batch(
                     company_id,
                     project_id,
                     item_id,
+                    normalized_item_name,
                     quantity,
                     quantity,
                     now,
@@ -1410,7 +1505,9 @@ def list_pallet_stock(
                 OR LOWER(COALESCE(c.name, '')) LIKE LOWER(?)
                 OR LOWER(COALESCE(p.name, '')) LIKE LOWER(?)
                 OR LOWER(COALESCE(i.code, '')) LIKE LOWER(?)
-                OR LOWER(COALESCE(i.name, '')) LIKE LOWER(?)
+                OR LOWER(
+                    COALESCE(NULLIF(pi.item_name, ''), i.name, '')
+                ) LIKE LOWER(?)
                 OR LOWER(COALESCE(pi.location, '')) LIKE LOWER(?)
             )
             """
@@ -1441,7 +1538,7 @@ def list_pallet_stock(
             p.code AS project_code,
             p.name AS project_name,
             i.code AS item_code,
-            i.name AS item_name
+            COALESCE(NULLIF(pi.item_name, ''), i.name) AS item_name
         FROM pallet_inventory pi
         LEFT JOIN companies c
             ON c.id = pi.company_id
@@ -1501,7 +1598,7 @@ def list_pallet_history(
             c.name AS company_name,
             p.name AS project_name,
             i.code AS item_code,
-            i.name AS item_name
+            COALESCE(NULLIF(pi.item_name, ''), i.name) AS item_name
         FROM pallet_history ph
         INNER JOIN pallet_inventory pi
             ON pi.id = ph.pallet_id
@@ -1521,7 +1618,8 @@ def list_pallet_history(
             c.name,
             p.name,
             i.code,
-            i.name
+            i.name,
+            pi.item_name
         ORDER BY
             ph.created_at DESC,
             MIN(ph.id) DESC

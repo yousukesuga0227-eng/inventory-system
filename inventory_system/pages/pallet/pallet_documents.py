@@ -7,7 +7,7 @@ from pathlib import Path
 from reportlab.graphics import renderPDF
 from reportlab.graphics.barcode import qr
 from reportlab.graphics.shapes import Drawing
-from reportlab.lib.pagesizes import A4
+from reportlab.lib.pagesizes import A4, landscape
 from reportlab.lib.units import mm
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.cidfonts import UnicodeCIDFont
@@ -132,25 +132,20 @@ def _draw_centered_wrapped_text(
     if not lines:
         lines = [""]
 
+    was_truncated = len(lines) > max_lines
     lines = lines[:max_lines]
 
-    if len(lines) == max_lines:
-        original_width = pdfmetrics.stringWidth(
-            lines[-1],
-            FONT_NAME,
-            font_size,
-        )
-        if original_width > max_width:
-            while (
-                lines[-1]
-                and pdfmetrics.stringWidth(
-                    lines[-1] + "…",
-                    FONT_NAME,
-                    font_size,
-                ) > max_width
-            ):
-                lines[-1] = lines[-1][:-1]
-            lines[-1] += "…"
+    if was_truncated:
+        while (
+            lines[-1]
+            and pdfmetrics.stringWidth(
+                lines[-1] + "…",
+                FONT_NAME,
+                font_size,
+            ) > max_width
+        ):
+            lines[-1] = lines[-1][:-1]
+        lines[-1] += "…"
 
     for index, line in enumerate(lines):
         pdf.drawCentredString(
@@ -332,6 +327,158 @@ def create_pallet_a4_pdf(pallets):
         )
 
         pdf.showPage()
+
+    pdf.save()
+    buffer.seek(0)
+    return buffer.getvalue()
+
+
+def create_receiving_plan_a4_pdf(plans):
+    """
+    入庫予定の管理票をA4横向きで作る。
+
+    1パレットにつき1ページを作成し、事前に印刷したQRを
+    入庫確定後もそのままQR出庫で使用できるようにする。
+    """
+
+    plans = list(plans)
+
+    if not plans:
+        raise ValueError("A4管理票を作成する入庫予定がありません。")
+
+    _register_font()
+    buffer = BytesIO()
+    page_size = landscape(A4)
+    pdf = canvas.Canvas(buffer, pagesize=page_size)
+    page_width, page_height = page_size
+
+    for plan in plans:
+        receipt_code = str(_value(plan, "receipt_code", ""))
+        receiving_date = _format_date(
+            _value(plan, "receiving_date", "")
+        )
+        company_name = str(_value(plan, "company_name", ""))
+        item_name = str(_value(plan, "item_name", ""))
+        pallet_count = int(_value(plan, "pallet_count", 1))
+        qty_per_pallet = int(_value(plan, "qty_per_pallet", 0))
+        total_qty = int(
+            _value(
+                plan,
+                "total_qty",
+                pallet_count * qty_per_pallet,
+            )
+        )
+
+        for sequence in range(1, pallet_count + 1):
+            pallet_code = f"{receipt_code}-P{sequence:03d}"
+            margin = 10 * mm
+            inner_x = margin + (7 * mm)
+            inner_top = page_height - margin - (7 * mm)
+            content_width = page_width - (2 * margin)
+            qr_size = 61 * mm
+            qr_x = page_width - margin - qr_size - (7 * mm)
+            qr_y = 22 * mm
+            left_width = qr_x - inner_x - (8 * mm)
+
+            pdf.setLineWidth(1.4)
+            pdf.rect(
+                margin,
+                margin,
+                content_width,
+                page_height - (2 * margin),
+            )
+
+            pdf.setFont(FONT_NAME, 19)
+            pdf.drawString(inner_x, inner_top - (2 * mm), "入庫管理票")
+            pdf.setFont(FONT_NAME, 20)
+            pdf.drawRightString(
+                page_width - margin - (7 * mm),
+                inner_top - (2 * mm),
+                receipt_code,
+            )
+            header_line_y = inner_top - (10 * mm)
+            pdf.line(
+                margin,
+                header_line_y,
+                page_width - margin,
+                header_line_y,
+            )
+
+            label_x = inner_x
+            value_x = inner_x + (38 * mm)
+            value_width = left_width - (38 * mm)
+
+            rows = [
+                ("入庫日", receiving_date, 28, header_line_y - (16 * mm)),
+                ("顧客", company_name, 28, header_line_y - (36 * mm)),
+                ("商品名", item_name, 25, header_line_y - (61 * mm)),
+            ]
+
+            for label, value, font_size, baseline_y in rows:
+                pdf.setFont(FONT_NAME, 14)
+                pdf.drawString(label_x, baseline_y, label)
+                pdf.setFont(FONT_NAME, font_size)
+                _draw_centered_wrapped_text(
+                    pdf=pdf,
+                    text=value,
+                    center_x=value_x + (value_width / 2),
+                    top_y=baseline_y + (3 * mm),
+                    max_width=value_width,
+                    font_size=font_size,
+                    line_height=font_size + 4,
+                    max_lines=2,
+                )
+
+            box_top = header_line_y - (92 * mm)
+            box_bottom = margin + (12 * mm)
+            box_width = left_width / 3
+            numeric_values = [
+                ("パレット枚数", f"{pallet_count:,} 枚"),
+                ("1パレットの商品数", f"{qty_per_pallet:,} 個"),
+                ("商品総数", f"{total_qty:,} 個"),
+            ]
+
+            for index, (label, value) in enumerate(numeric_values):
+                box_x = inner_x + (box_width * index)
+                pdf.rect(
+                    box_x,
+                    box_bottom,
+                    box_width,
+                    box_top - box_bottom,
+                )
+                pdf.setFont(FONT_NAME, 12)
+                pdf.drawCentredString(
+                    box_x + (box_width / 2),
+                    box_top - (10 * mm),
+                    label,
+                )
+                pdf.setFont(FONT_NAME, 27)
+                pdf.drawCentredString(
+                    box_x + (box_width / 2),
+                    box_bottom + (12 * mm),
+                    value,
+                )
+
+            pdf.setFont(FONT_NAME, 18)
+            pdf.drawCentredString(
+                qr_x + (qr_size / 2),
+                header_line_y - (20 * mm),
+                f"{sequence:03d} / {pallet_count:03d}",
+            )
+            _draw_qr(
+                pdf=pdf,
+                value=pallet_code,
+                x=qr_x,
+                y=qr_y,
+                size=qr_size,
+            )
+            pdf.setFont(FONT_NAME, 11)
+            pdf.drawCentredString(
+                qr_x + (qr_size / 2),
+                16 * mm,
+                pallet_code,
+            )
+            pdf.showPage()
 
     pdf.save()
     buffer.seek(0)

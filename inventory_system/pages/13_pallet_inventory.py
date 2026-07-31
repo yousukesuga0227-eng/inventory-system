@@ -351,7 +351,7 @@ def _normalized_master_value(value):
     return str(value or "").strip().casefold()
 
 
-def validate_receiving_csv(dataframe, companies, items):
+def validate_receiving_csv(dataframe, companies):
     required_columns = [
         "入庫日",
         "顧客",
@@ -385,22 +385,6 @@ def validate_receiving_csv(dataframe, companies, items):
             }
         )
 
-    item_rows = []
-
-    for item in items:
-        item_rows.append(
-            {
-                "id": int(row_value(item, "id", 0)),
-                "code": _normalized_master_value(
-                    row_value(item, "code", "")
-                ),
-                "name": _normalized_master_value(
-                    row_value(item, "name", "")
-                ),
-                "project_id": row_value(item, "project_id"),
-            }
-        )
-
     valid_plans = []
     errors = []
 
@@ -424,33 +408,16 @@ def validate_receiving_csv(dataframe, companies, items):
             )
             continue
 
-        optional_item_code = ""
+        raw_item_name = row["商品名"]
 
-        if "商品コード" in dataframe.columns:
-            optional_item_code = _normalized_master_value(
-                row.get("商品コード", "")
-            )
-
-        item_name = _normalized_master_value(row["商品名"])
-
-        if optional_item_code:
-            item_matches = [
-                item
-                for item in item_rows
-                if item["code"] == optional_item_code
-            ]
+        if pd.isna(raw_item_name):
+            item_name = ""
         else:
-            item_matches = [
-                item
-                for item in item_rows
-                if item["name"] == item_name
-            ]
+            item_name = str(raw_item_name).strip()
 
-        if len(item_matches) != 1:
+        if not item_name:
             errors.append(
-                f"{row_number}行目：商品「{row['商品名']}」を"
-                "商品マスターから1件に特定できません。"
-                "同名商品がある場合は商品コード列を追加してください。"
+                f"{row_number}行目：商品名を入力してください。"
             )
             continue
 
@@ -496,13 +463,13 @@ def validate_receiving_csv(dataframe, companies, items):
             continue
 
         company = company_matches[0]
-        item = item_matches[0]
         valid_plans.append(
             {
                 "receiving_date": parsed_date.date(),
                 "company_id": company["id"],
-                "project_id": item["project_id"],
-                "item_id": item["id"],
+                "project_id": None,
+                "item_id": None,
+                "item_name": item_name,
                 "pallet_count": pallet_count,
                 "qty_per_pallet": qty_per_pallet,
             }
@@ -546,8 +513,8 @@ with tab_receiving_plan:
         "管理票は1パレットにつき1ページです。"
     )
     st.caption(
-        "案件の選択は廃止しています。商品に紐づく案件情報だけを"
-        "DB内部で引き継ぎます。"
+        "案件の選択はありません。商品名はマスター登録なしで"
+        "そのまま入力できます。"
     )
 
     if st.session_state.receiving_plan_flash:
@@ -578,15 +545,11 @@ with tab_receiving_plan:
         ORDER BY code, name
         """
     ).fetchall()
-    master_items = get_items_for_company(conn=conn, company_id=None)
     plan_company_map = company_option_map(master_companies)
-    plan_item_map = item_option_map(master_items)
 
     with plan_form_tab:
         if not plan_company_map:
             st.warning("企業マスターに顧客が登録されていません。")
-        elif not plan_item_map:
-            st.warning("商品マスターに商品が登録されていません。")
         else:
             with st.form("receiving_plan_input_form"):
                 receiving_date_value = st.date_input(
@@ -597,9 +560,9 @@ with tab_receiving_plan:
                     "顧客",
                     options=list(plan_company_map.keys()),
                 )
-                item_label = st.selectbox(
+                item_name_value = st.text_input(
                     "商品名",
-                    options=list(plan_item_map.keys()),
+                    placeholder="商品名を入力",
                 )
                 count_col, quantity_col = st.columns(2)
 
@@ -628,23 +591,28 @@ with tab_receiving_plan:
                 )
 
             if preview_submitted:
-                selected_company = plan_company_map[company_label]
-                selected_item = plan_item_map[item_label]
-                st.session_state.receiving_plan_preview = {
-                    "receiving_date": receiving_date_value,
-                    "company_id": selected_company["id"],
-                    "company_name": selected_company["name"],
-                    "project_id": selected_item["project_id"],
-                    "item_id": selected_item["id"],
-                    "item_name": selected_item["name"],
-                    "item_code": selected_item["code"],
-                    "pallet_count": int(plan_pallet_count),
-                    "qty_per_pallet": int(plan_qty_per_pallet),
-                    "total_qty": (
-                        int(plan_pallet_count)
-                        * int(plan_qty_per_pallet)
-                    ),
-                }
+                normalized_item_name = str(item_name_value or "").strip()
+
+                if not normalized_item_name:
+                    st.session_state.receiving_plan_preview = None
+                    st.error("商品名を入力してください。")
+                else:
+                    selected_company = plan_company_map[company_label]
+                    st.session_state.receiving_plan_preview = {
+                        "receiving_date": receiving_date_value,
+                        "company_id": selected_company["id"],
+                        "company_name": selected_company["name"],
+                        "project_id": None,
+                        "item_id": None,
+                        "item_name": normalized_item_name,
+                        "item_code": "",
+                        "pallet_count": int(plan_pallet_count),
+                        "qty_per_pallet": int(plan_qty_per_pallet),
+                        "total_qty": (
+                            int(plan_pallet_count)
+                            * int(plan_qty_per_pallet)
+                        ),
+                    }
 
             plan_preview = st.session_state.receiving_plan_preview
 
@@ -714,6 +682,7 @@ with tab_receiving_plan:
                                 "qty_per_pallet"
                             ],
                             username=username,
+                            item_name=plan_preview["item_name"],
                         )
                         registered_plan = get_receiving_plan_by_code(
                             conn,
@@ -767,8 +736,8 @@ with tab_receiving_plan:
             mime="text/csv",
         )
         st.caption(
-            "顧客・商品名はマスターと同じ表記にしてください。"
-            "同名商品がある場合は任意の「商品コード」列を追加できます。"
+            "顧客は企業マスターと同じ表記にしてください。"
+            "商品名はCSVに入力した文字をそのまま登録します。"
         )
 
         if st.session_state.receiving_plan_csv_flash:
@@ -813,7 +782,6 @@ with tab_receiving_plan:
                 csv_plans, csv_errors = validate_receiving_csv(
                     csv_dataframe,
                     master_companies,
-                    master_items,
                 )
 
                 if csv_errors:
@@ -1960,6 +1928,10 @@ with tab_history:
                 edit_pallets[0],
                 "item_id",
             )
+            current_item_name = str(
+                row_value(edit_pallets[0], "item_name", "") or ""
+            ).strip()
+            free_name_batch = current_item_id in ("", None)
 
             edit_companies = conn.execute(
                 """
@@ -2053,11 +2025,17 @@ with tab_history:
                     options=edit_company_labels,
                     index=current_company_index,
                 )
-                edit_item_label = st.selectbox(
-                    "商品",
-                    options=edit_item_labels,
-                    index=current_item_index,
-                )
+                if free_name_batch:
+                    edit_item_name_value = st.text_input(
+                        "商品名",
+                        value=current_item_name,
+                    )
+                else:
+                    edit_item_label = st.selectbox(
+                        "商品",
+                        options=edit_item_labels,
+                        index=current_item_index,
+                    )
 
                 edit_allocation_rows = []
 
@@ -2156,9 +2134,29 @@ with tab_history:
                     selected_edit_company = edit_company_map[
                         edit_company_label
                     ]
-                    selected_edit_item = edit_item_map[
-                        edit_item_label
-                    ]
+                    if free_name_batch:
+                        selected_edit_project_id = None
+                        selected_edit_item_id = None
+                        selected_edit_item_name = str(
+                            edit_item_name_value or ""
+                        ).strip()
+                    else:
+                        selected_edit_item = edit_item_map[
+                            edit_item_label
+                        ]
+                        selected_edit_project_id = row_value(
+                            selected_edit_item,
+                            "project_id",
+                        )
+                        selected_edit_item_id = row_value(
+                            selected_edit_item,
+                            "id",
+                        )
+                        selected_edit_item_name = row_value(
+                            selected_edit_item,
+                            "name",
+                            "",
+                        )
 
                     result = update_pallet_batch(
                         conn=conn,
@@ -2167,17 +2165,12 @@ with tab_history:
                             selected_edit_company,
                             "id",
                         ),
-                        project_id=row_value(
-                            selected_edit_item,
-                            "project_id",
-                        ),
-                        item_id=row_value(
-                            selected_edit_item,
-                            "id",
-                        ),
+                        project_id=selected_edit_project_id,
+                        item_id=selected_edit_item_id,
                         allocations=edited_allocations.to_dict(
                             "records"
                         ),
+                        item_name=selected_edit_item_name,
                     )
 
                     revised_pallets = get_batch_pallets(
