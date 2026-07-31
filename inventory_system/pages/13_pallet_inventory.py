@@ -8,12 +8,15 @@ from database import get_connection
 from pages.pallet.pallet_db import (
     PalletError,
     create_pallet_batch,
+    delete_pallet_batch,
     get_batch_pallets,
     get_items_for_company,
     get_pallet_by_code,
+    list_editable_pallet_batches,
     list_pallet_history,
     list_pallet_stock,
     ship_pallet,
+    update_pallet_batch,
 )
 from pages.pallet.pallet_documents import create_pallet_a4_pdf
 from pages.pallet.pallet_tables import (
@@ -73,6 +76,10 @@ SESSION_DEFAULTS = {
     "pallet_receiving_flash": "",
     "pallet_shipping_target": None,
     "pallet_shipping_flash": "",
+    "pallet_history_flash": "",
+    "pallet_history_pdf": None,
+    "pallet_history_pdf_name": "",
+    "pallet_history_pdf_batch_code": "",
 }
 
 for session_key, default_value in SESSION_DEFAULTS.items():
@@ -209,23 +216,22 @@ def history_dataframe(rows):
                     row_value(row, "created_at", "")
                 ),
                 "区分": row_value(row, "history_type", ""),
-                "パレットコード": row_value(
+                "登録No／パレット": row_value(
                     row,
                     "pallet_code",
                     "",
-                ),
-                "パレット番号": (
-                    f"{int(row_value(row, 'pallet_sequence', 0)):03d}"
-                    f" / "
-                    f"{int(row_value(row, 'total_pallets', 0)):03d}"
                 ),
                 "荷主": row_value(row, "company_name", ""),
                 "案件": row_value(row, "project_name", ""),
                 "商品コード": row_value(row, "item_code", ""),
                 "商品名": row_value(row, "item_name", ""),
-                "数量": int(row_value(row, "qty", 0)),
-                "処理前": int(row_value(row, "before_qty", 0)),
-                "処理後": int(row_value(row, "after_qty", 0)),
+                "商品数": int(row_value(row, "qty", 0)),
+                "処理前商品数": int(
+                    row_value(row, "before_qty", 0)
+                ),
+                "処理後商品数": int(
+                    row_value(row, "after_qty", 0)
+                ),
                 "担当者": row_value(row, "username", ""),
                 "備考": row_value(row, "remarks", ""),
             }
@@ -962,6 +968,23 @@ with tab_stock:
 with tab_history:
     st.subheader("入出庫履歴")
 
+    if st.session_state.pallet_history_flash:
+        st.success(st.session_state.pallet_history_flash)
+        st.session_state.pallet_history_flash = ""
+
+    if st.session_state.pallet_history_pdf is not None:
+        st.download_button(
+            "📄 修正後のA4票をダウンロード",
+            data=st.session_state.pallet_history_pdf,
+            file_name=st.session_state.pallet_history_pdf_name,
+            mime="application/pdf",
+            use_container_width=True,
+        )
+        st.caption(
+            "修正した登録No："
+            f"{st.session_state.pallet_history_pdf_batch_code}"
+        )
+
     history_filter_col1, history_filter_col2 = st.columns(2)
 
     with history_filter_col1:
@@ -1010,6 +1033,387 @@ with tab_history:
             mime="text/csv",
             use_container_width=True,
         )
+
+    st.divider()
+    st.subheader("誤登録の変更・削除")
+    st.caption(
+        "まだ一度も出庫していない登録Noだけ変更・削除できます。"
+        "パレットコードとパレット枚数は変更されません。"
+    )
+
+    editable_batches = list_editable_pallet_batches(conn)
+
+    if not editable_batches:
+        st.info("変更・削除できる未出庫の登録はありません。")
+
+    else:
+        editable_batch_map = {}
+
+        for batch in editable_batches:
+            batch_code = str(
+                row_value(batch, "batch_code", "")
+            )
+            company_name = str(
+                row_value(batch, "company_name", "")
+            )
+            item_code = str(
+                row_value(batch, "item_code", "")
+            )
+            item_name = str(
+                row_value(batch, "item_name", "")
+            )
+            total_qty = int(
+                row_value(batch, "total_qty", 0)
+            )
+            pallet_count = int(
+                row_value(batch, "pallet_count", 0)
+            )
+
+            label = (
+                f"{batch_code}｜{company_name}｜"
+                f"{item_code} {item_name}｜"
+                f"{total_qty:,}個・{pallet_count:,}枚"
+            )
+            editable_batch_map[label] = batch
+
+        selected_edit_label = st.selectbox(
+            "変更・削除する登録No",
+            options=list(editable_batch_map.keys()),
+            key="pallet_edit_batch",
+        )
+        selected_edit_batch = editable_batch_map[
+            selected_edit_label
+        ]
+        selected_edit_batch_code = str(
+            row_value(
+                selected_edit_batch,
+                "batch_code",
+                "",
+            )
+        )
+        edit_pallets = get_batch_pallets(
+            conn,
+            selected_edit_batch_code,
+        )
+
+        if not edit_pallets:
+            st.warning(
+                "選択した登録Noは別の端末で更新されました。"
+                "画面を更新してください。"
+            )
+
+        else:
+            current_company_id = row_value(
+                edit_pallets[0],
+                "company_id",
+            )
+            current_item_id = row_value(
+                edit_pallets[0],
+                "item_id",
+            )
+
+            edit_companies = conn.execute(
+                """
+                SELECT
+                    id,
+                    code,
+                    name
+                FROM companies
+                ORDER BY
+                    code,
+                    name
+                """
+            ).fetchall()
+            edit_company_map = {}
+
+            for company in edit_companies:
+                company_id = row_value(company, "id")
+                company_code = str(
+                    row_value(company, "code", "") or ""
+                ).strip()
+                company_name = str(
+                    row_value(company, "name", "名称なし")
+                    or "名称なし"
+                ).strip()
+                company_label = (
+                    f"{company_code} - {company_name}"
+                    if company_code
+                    else company_name
+                )
+                edit_company_map[company_label] = company
+
+            edit_company_labels = list(edit_company_map.keys())
+            current_company_index = next(
+                (
+                    index
+                    for index, label in enumerate(edit_company_labels)
+                    if row_value(
+                        edit_company_map[label],
+                        "id",
+                    )
+                    == current_company_id
+                ),
+                0,
+            )
+
+            edit_items = get_items_for_company(
+                conn,
+                current_company_id,
+            )
+            edit_item_map = {}
+
+            for item in edit_items:
+                item_code = row_value(item, "code", "")
+                item_name = row_value(item, "name", "")
+                project_code = row_value(
+                    item,
+                    "project_code",
+                    "",
+                )
+                project_name = row_value(
+                    item,
+                    "project_name",
+                    "",
+                )
+                item_label = (
+                    f"{item_code} - {item_name}"
+                    f"　［{project_code} - {project_name}］"
+                )
+                edit_item_map[item_label] = item
+
+            edit_item_labels = list(edit_item_map.keys())
+            current_item_index = next(
+                (
+                    index
+                    for index, label in enumerate(edit_item_labels)
+                    if row_value(
+                        edit_item_map[label],
+                        "id",
+                    )
+                    == current_item_id
+                ),
+                0,
+            )
+
+            with st.form(
+                f"pallet_batch_edit_form_"
+                f"{selected_edit_batch_code}"
+            ):
+                edit_company_label = st.selectbox(
+                    "荷主",
+                    options=edit_company_labels,
+                    index=current_company_index,
+                )
+                edit_item_label = st.selectbox(
+                    "商品",
+                    options=edit_item_labels,
+                    index=current_item_index,
+                )
+
+                edit_allocation_rows = []
+
+                for pallet in edit_pallets:
+                    sequence = int(
+                        row_value(
+                            pallet,
+                            "pallet_sequence",
+                            0,
+                        )
+                    )
+                    total_pallets = int(
+                        row_value(
+                            pallet,
+                            "total_pallets",
+                            0,
+                        )
+                    )
+                    edit_allocation_rows.append(
+                        {
+                            "パレットコード": row_value(
+                                pallet,
+                                "pallet_code",
+                                "",
+                            ),
+                            "パレット番号": (
+                                f"{sequence:03d} / "
+                                f"{total_pallets:03d}"
+                            ),
+                            "個数": int(
+                                row_value(
+                                    pallet,
+                                    "initial_qty",
+                                    0,
+                                )
+                            ),
+                        }
+                    )
+
+                edited_allocations = st.data_editor(
+                    pd.DataFrame(edit_allocation_rows),
+                    hide_index=True,
+                    use_container_width=True,
+                    num_rows="fixed",
+                    key=(
+                        "pallet_batch_edit_allocations_"
+                        f"{selected_edit_batch_code}"
+                    ),
+                    column_config={
+                        "パレットコード":
+                            st.column_config.TextColumn(
+                                "パレットコード",
+                                disabled=True,
+                            ),
+                        "パレット番号":
+                            st.column_config.TextColumn(
+                                "パレット番号",
+                                disabled=True,
+                            ),
+                        "個数":
+                            st.column_config.NumberColumn(
+                                "商品数",
+                                min_value=0,
+                                max_value=1_000_000,
+                                step=1,
+                                required=True,
+                                format="%d 個",
+                            ),
+                    },
+                )
+
+                edited_allocations["個数"] = (
+                    pd.to_numeric(
+                        edited_allocations["個数"],
+                        errors="coerce",
+                    )
+                    .fillna(0)
+                    .astype(int)
+                )
+                edited_total_qty = int(
+                    edited_allocations["個数"].sum()
+                )
+                st.metric(
+                    "変更後の商品総数",
+                    f"{edited_total_qty:,} 個",
+                )
+
+                update_submitted = st.form_submit_button(
+                    "💾 変更を保存",
+                    type="primary",
+                    use_container_width=True,
+                )
+
+            if update_submitted:
+                try:
+                    selected_edit_company = edit_company_map[
+                        edit_company_label
+                    ]
+                    selected_edit_item = edit_item_map[
+                        edit_item_label
+                    ]
+
+                    result = update_pallet_batch(
+                        conn=conn,
+                        batch_code=selected_edit_batch_code,
+                        company_id=row_value(
+                            selected_edit_company,
+                            "id",
+                        ),
+                        project_id=row_value(
+                            selected_edit_item,
+                            "project_id",
+                        ),
+                        item_id=row_value(
+                            selected_edit_item,
+                            "id",
+                        ),
+                        allocations=edited_allocations.to_dict(
+                            "records"
+                        ),
+                    )
+
+                    revised_pallets = get_batch_pallets(
+                        conn,
+                        selected_edit_batch_code,
+                    )
+                    revised_pdf = create_pallet_a4_pdf(
+                        revised_pallets
+                    )
+                    st.session_state.pallet_history_pdf = (
+                        revised_pdf
+                    )
+                    st.session_state.pallet_history_pdf_name = (
+                        f"pallet_{selected_edit_batch_code}.pdf"
+                    )
+                    st.session_state[
+                        "pallet_history_pdf_batch_code"
+                    ] = selected_edit_batch_code
+                    st.session_state.pallet_history_flash = (
+                        "登録内容を変更しました！"
+                        f" 商品総数："
+                        f"{int(result['total_qty']):,}個"
+                    )
+                    st.rerun()
+
+                except PalletError as exc:
+                    st.error(str(exc))
+
+                except Exception as exc:
+                    st.error(
+                        "登録内容の変更中にエラーが"
+                        f"発生しました：{exc}"
+                    )
+
+            with st.expander("🗑 この誤登録を削除"):
+                st.warning(
+                    "この登録Noに含まれる全パレットを、"
+                    "在庫一覧と入出庫履歴から削除します。"
+                )
+
+                with st.form(
+                    f"pallet_batch_delete_form_"
+                    f"{selected_edit_batch_code}"
+                ):
+                    delete_confirmed = st.checkbox(
+                        f"{selected_edit_batch_code} を削除する"
+                    )
+                    delete_submitted = st.form_submit_button(
+                        "🗑 登録を削除",
+                        use_container_width=True,
+                    )
+
+                if delete_submitted:
+                    if not delete_confirmed:
+                        st.warning(
+                            "削除確認にチェックを入れてから、"
+                            "もう一度「登録を削除」を押してください。"
+                        )
+
+                    else:
+                        try:
+                            result = delete_pallet_batch(
+                                conn,
+                                selected_edit_batch_code,
+                            )
+                            st.session_state.pallet_history_pdf = None
+                            st.session_state.pallet_history_pdf_name = ""
+                            st.session_state[
+                                "pallet_history_pdf_batch_code"
+                            ] = ""
+                            st.session_state.pallet_history_flash = (
+                                "誤登録を削除しました。"
+                                f" 商品総数："
+                                f"{int(result['total_qty']):,}個"
+                            )
+                            st.rerun()
+
+                        except PalletError as exc:
+                            st.error(str(exc))
+
+                        except Exception as exc:
+                            st.error(
+                                "誤登録の削除中にエラーが"
+                                f"発生しました：{exc}"
+                            )
 
 
 # ============================================================

@@ -502,6 +502,9 @@ def get_batch_pallets(conn, batch_code):
             pi.batch_code,
             pi.pallet_sequence,
             pi.total_pallets,
+            pi.company_id,
+            pi.project_id,
+            pi.item_id,
             pi.initial_qty,
             pi.current_qty,
             pi.status,
@@ -530,6 +533,298 @@ def get_batch_pallets(conn, batch_code):
     )
 
     return _fetchall_dict(cursor)
+
+
+def list_editable_pallet_batches(conn):
+    """
+    まだ一度も出庫されていない登録Noを新しい順で取得する。
+
+    誤登録の変更・削除は登録No単位で行う。1枚でも出庫されている
+    登録Noは対象外にし、在庫と履歴の不整合を防ぐ。
+    """
+
+    cursor = _execute(
+        conn,
+        f"""
+        SELECT
+            pi.batch_code,
+            MIN(pi.created_at) AS created_at,
+            MIN(pi.company_id) AS company_id,
+            MIN(pi.project_id) AS project_id,
+            MIN(pi.item_id) AS item_id,
+            MAX(c.name) AS company_name,
+            MAX(p.name) AS project_name,
+            MAX(i.code) AS item_code,
+            MAX(i.name) AS item_name,
+            COUNT(*) AS pallet_count,
+            SUM(pi.initial_qty) AS total_qty
+        FROM pallet_inventory pi
+        LEFT JOIN companies c
+            ON c.id = pi.company_id
+        LEFT JOIN projects p
+            ON p.id = pi.project_id
+        LEFT JOIN items i
+            ON i.id = pi.item_id
+        WHERE {_not_deleted_condition("pi.is_deleted")}
+        GROUP BY pi.batch_code
+        HAVING
+            SUM(
+                CASE
+                    WHEN
+                        pi.current_qty = pi.initial_qty
+                        AND pi.status = '保管中'
+                    THEN 1
+                    ELSE 0
+                END
+            ) = COUNT(*)
+        ORDER BY
+            MIN(pi.created_at) DESC,
+            pi.batch_code DESC
+        """
+    )
+
+    return _fetchall_dict(cursor)
+
+
+def _normalize_allocation_quantities(allocations):
+    if not allocations:
+        raise PalletStockError("パレットの数量内訳がありません。")
+
+    quantities = []
+
+    for allocation in allocations:
+        try:
+            if isinstance(allocation, dict):
+                quantity = int(allocation["個数"])
+            else:
+                quantity = int(allocation)
+        except (KeyError, TypeError, ValueError) as exc:
+            raise PalletStockError(
+                "パレット数量に不正な値があります。"
+            ) from exc
+
+        if quantity < 0:
+            raise PalletStockError(
+                "パレット数量は0以上で入力してください。"
+            )
+
+        quantities.append(quantity)
+
+    if sum(quantities) <= 0:
+        raise PalletStockError(
+            "商品の合計数量は1個以上にしてください。"
+        )
+
+    return quantities
+
+
+def _get_editable_batch_rows(conn, batch_code):
+    normalized_batch_code = str(batch_code or "").strip().upper()
+
+    if not normalized_batch_code:
+        raise PalletNotFoundError("登録Noが指定されていません。")
+
+    rows = get_batch_pallets(conn, normalized_batch_code)
+
+    if not rows:
+        raise PalletNotFoundError(
+            f"登録No「{normalized_batch_code}」が見つかりません。"
+        )
+
+    for row in rows:
+        initial_qty = int(row["initial_qty"])
+        current_qty = int(row["current_qty"])
+        status = str(row["status"] or "")
+
+        if current_qty != initial_qty or status != "保管中":
+            raise PalletStockError(
+                "この登録Noはすでに出庫処理されています。"
+                "登録内容の変更・削除はできません。"
+            )
+
+    return normalized_batch_code, rows
+
+
+def update_pallet_batch(
+    conn,
+    batch_code,
+    company_id,
+    project_id,
+    item_id,
+    allocations,
+):
+    """
+    未出庫の登録Noについて、荷主・商品・数量内訳を修正する。
+
+    パレットコードと枚数は維持し、既存の入庫履歴も正しい商品数量へ
+    更新する。
+    """
+
+    normalized_batch_code, rows = _get_editable_batch_rows(
+        conn,
+        batch_code,
+    )
+    quantities = _normalize_allocation_quantities(allocations)
+
+    if len(quantities) != len(rows):
+        raise PalletStockError(
+            "パレット枚数は変更できません。"
+            "登録時と同じ枚数で数量を入力してください。"
+        )
+
+    now = _now()
+
+    try:
+        for row, quantity in zip(rows, quantities):
+            pallet_id = int(row["id"])
+            old_initial_qty = int(row["initial_qty"])
+            old_current_qty = int(row["current_qty"])
+
+            cursor = _execute(
+                conn,
+                f"""
+                UPDATE pallet_inventory
+                SET
+                    company_id = ?,
+                    project_id = ?,
+                    item_id = ?,
+                    initial_qty = ?,
+                    current_qty = ?,
+                    updated_at = ?
+                WHERE
+                    id = ?
+                    AND initial_qty = ?
+                    AND current_qty = ?
+                    AND status = '保管中'
+                    AND {_not_deleted_condition("is_deleted")}
+                """,
+                (
+                    company_id,
+                    project_id,
+                    item_id,
+                    quantity,
+                    quantity,
+                    now,
+                    pallet_id,
+                    old_initial_qty,
+                    old_current_qty,
+                ),
+            )
+
+            rowcount = _cursor_attribute(cursor, "rowcount")
+
+            if rowcount is not None and rowcount != 1:
+                raise PalletConflictError(
+                    "別の端末で在庫が更新されました。"
+                    "画面を更新して確認してください。"
+                )
+
+            cursor = _execute(
+                conn,
+                """
+                UPDATE pallet_history
+                SET
+                    qty = ?,
+                    before_qty = 0,
+                    after_qty = ?
+                WHERE
+                    pallet_id = ?
+                    AND history_type = '入庫'
+                """,
+                (
+                    quantity,
+                    quantity,
+                    pallet_id,
+                ),
+            )
+
+            history_rowcount = _cursor_attribute(cursor, "rowcount")
+
+            if (
+                history_rowcount is not None
+                and history_rowcount != 1
+            ):
+                raise PalletConflictError(
+                    "入庫履歴の状態が想定と異なります。"
+                    "変更を中止しました。"
+                )
+
+        conn.commit()
+
+        return {
+            "batch_code": normalized_batch_code,
+            "pallet_count": len(rows),
+            "total_qty": sum(quantities),
+        }
+
+    except Exception:
+        _rollback_safely(conn)
+        raise
+
+
+def delete_pallet_batch(conn, batch_code):
+    """
+    未出庫の誤登録を登録No単位で論理削除する。
+
+    在庫一覧と入出庫履歴からは表示しないが、DB上の行は保持する。
+    """
+
+    normalized_batch_code, rows = _get_editable_batch_rows(
+        conn,
+        batch_code,
+    )
+    now = _now()
+
+    try:
+        for row in rows:
+            pallet_id = int(row["id"])
+            initial_qty = int(row["initial_qty"])
+            current_qty = int(row["current_qty"])
+
+            cursor = _execute(
+                conn,
+                f"""
+                UPDATE pallet_inventory
+                SET
+                    is_deleted = TRUE,
+                    updated_at = ?
+                WHERE
+                    id = ?
+                    AND initial_qty = ?
+                    AND current_qty = ?
+                    AND status = '保管中'
+                    AND {_not_deleted_condition("is_deleted")}
+                """,
+                (
+                    now,
+                    pallet_id,
+                    initial_qty,
+                    current_qty,
+                ),
+            )
+
+            rowcount = _cursor_attribute(cursor, "rowcount")
+
+            if rowcount is not None and rowcount != 1:
+                raise PalletConflictError(
+                    "別の端末で在庫が更新されました。"
+                    "削除を中止しました。"
+                )
+
+        conn.commit()
+
+        return {
+            "batch_code": normalized_batch_code,
+            "pallet_count": len(rows),
+            "total_qty": sum(
+                int(row["initial_qty"])
+                for row in rows
+            ),
+        }
+
+    except Exception:
+        _rollback_safely(conn)
+        raise
 
 
 def ship_pallet(
@@ -742,17 +1037,21 @@ def list_pallet_history(
         conn,
         f"""
         SELECT
-            ph.id,
-            ph.pallet_code,
+            MIN(ph.id) AS id,
+            pi.batch_code,
+            CASE
+                WHEN ph.history_type = '入庫'
+                THEN pi.batch_code
+                ELSE MIN(ph.pallet_code)
+            END AS pallet_code,
             ph.history_type,
-            ph.qty,
-            ph.before_qty,
-            ph.after_qty,
+            SUM(ph.qty) AS qty,
+            SUM(ph.before_qty) AS before_qty,
+            SUM(ph.after_qty) AS after_qty,
             ph.username,
             ph.remarks,
             ph.created_at,
-            pi.pallet_sequence,
-            pi.total_pallets,
+            COUNT(DISTINCT ph.pallet_id) AS affected_pallets,
             c.name AS company_name,
             p.name AS project_name,
             i.code AS item_code,
@@ -767,9 +1066,19 @@ def list_pallet_history(
         LEFT JOIN items i
             ON i.id = pi.item_id
         WHERE {where_clause}
+        GROUP BY
+            pi.batch_code,
+            ph.history_type,
+            ph.username,
+            ph.remarks,
+            ph.created_at,
+            c.name,
+            p.name,
+            i.code,
+            i.name
         ORDER BY
             ph.created_at DESC,
-            ph.id DESC
+            MIN(ph.id) DESC
         LIMIT ?
         """,
         tuple(params),
