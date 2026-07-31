@@ -5,7 +5,8 @@ SQLite と PostgreSQL（Supabase）の両方で動作する。
 """
 
 import os
-from datetime import datetime, timedelta, timezone
+import re
+from datetime import date, datetime, timedelta, timezone
 from uuid import uuid4
 
 
@@ -303,6 +304,8 @@ def create_pallet_batch(
     username,
     location="",
     remarks="",
+    pallet_codes=None,
+    commit=True,
 ):
     """
     パレット一式を入庫登録する。
@@ -336,13 +339,36 @@ def create_pallet_batch(
             "入庫数量の合計は1個以上にしてください。"
         )
 
-    batch_code = _create_batch_code()
     total_pallets = len(normalized_allocations)
+    normalized_pallet_codes = [None] * total_pallets
+
+    if pallet_codes is not None:
+        normalized_pallet_codes = [
+            str(code or "").strip().upper()
+            for code in pallet_codes
+        ]
+
+        if len(normalized_pallet_codes) != total_pallets:
+            raise PalletStockError(
+                "パレット数量とQRコードの件数が一致しません。"
+            )
+
+        if any(not code for code in normalized_pallet_codes):
+            raise PalletStockError("空のQRコードは登録できません。")
+
+        if len(set(normalized_pallet_codes)) != total_pallets:
+            raise PalletStockError(
+                "同じQRコードが複数のパレットに指定されています。"
+            )
+
+    batch_code = _create_batch_code()
     now = _now()
+    normalized_location = str(location or "").strip()
+    normalized_remarks = str(remarks or "").strip()
 
     try:
-        for sequence, quantity in enumerate(
-            normalized_allocations,
+        for sequence, (quantity, planned_pallet_code) in enumerate(
+            zip(normalized_allocations, normalized_pallet_codes),
             start=1,
         ):
             temporary_code = f"TEMP-{uuid4().hex.upper()}"
@@ -382,15 +408,18 @@ def create_pallet_batch(
                     item_id,
                     quantity,
                     quantity,
-                    location.strip() or None,
-                    remarks.strip() or None,
+                    normalized_location or None,
+                    normalized_remarks or None,
                     username,
                     now,
                     now,
                 ),
             )
 
-            pallet_code = f"PAL{pallet_id:09d}"
+            pallet_code = (
+                planned_pallet_code
+                or f"PAL{pallet_id:09d}"
+            )
 
             _execute(
                 conn,
@@ -426,13 +455,430 @@ def create_pallet_batch(
                     quantity,
                     quantity,
                     username,
-                    remarks.strip() or None,
+                    normalized_remarks or None,
                     now,
                 ),
             )
 
-        conn.commit()
+        if commit:
+            conn.commit()
         return batch_code
+
+    except Exception:
+        _rollback_safely(conn)
+        raise
+
+
+def _normalize_receipt_code(receipt_or_pallet_code):
+    """入庫管理票の個別QRから、元の入庫管理番号を取り出す。"""
+
+    normalized = str(receipt_or_pallet_code or "").strip().upper()
+    match = re.fullmatch(r"(IN-\d{6}-\d+)-P\d{3}", normalized)
+    return match.group(1) if match else normalized
+
+
+def _normalize_receiving_date(value):
+    if isinstance(value, datetime):
+        return value.date()
+
+    if isinstance(value, date):
+        return value
+
+    text = str(value or "").strip()
+
+    try:
+        return date.fromisoformat(text[:10])
+    except ValueError as exc:
+        raise PalletStockError(
+            "入庫日は YYYY-MM-DD 形式で入力してください。"
+        ) from exc
+
+
+def _normalize_receiving_plan(plan):
+    try:
+        company_id = int(plan["company_id"])
+        item_id = int(plan["item_id"])
+        pallet_count = int(plan["pallet_count"])
+        qty_per_pallet = int(plan["qty_per_pallet"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise PalletStockError(
+            "入庫予定の顧客・商品・数量に不正な値があります。"
+        ) from exc
+
+    if pallet_count < 1 or pallet_count > 1000:
+        raise PalletStockError(
+            "パレット枚数は1～1,000枚で入力してください。"
+        )
+
+    if qty_per_pallet < 1 or qty_per_pallet > 1_000_000:
+        raise PalletStockError(
+            "1パレットあたりの商品個数は"
+            "1～1,000,000個で入力してください。"
+        )
+
+    project_id = plan.get("project_id")
+
+    if project_id in ("", None):
+        project_id = None
+    else:
+        project_id = int(project_id)
+
+    return {
+        "receiving_date": _normalize_receiving_date(
+            plan.get("receiving_date")
+        ),
+        "company_id": company_id,
+        "project_id": project_id,
+        "item_id": item_id,
+        "pallet_count": pallet_count,
+        "qty_per_pallet": qty_per_pallet,
+        "total_qty": pallet_count * qty_per_pallet,
+        "remarks": str(plan.get("remarks") or "").strip(),
+    }
+
+
+def create_receiving_plans(conn, plans, username):
+    """入庫予定を1件以上まとめて登録し、入庫管理番号を返す。"""
+
+    normalized_plans = [
+        _normalize_receiving_plan(plan)
+        for plan in plans
+    ]
+
+    if not normalized_plans:
+        raise PalletStockError("登録する入庫予定がありません。")
+
+    now = _now()
+    receipt_codes = []
+
+    try:
+        for plan in normalized_plans:
+            temporary_code = f"TEMP-{uuid4().hex.upper()}"
+            plan_id = _insert_and_get_id(
+                conn,
+                """
+                INSERT INTO pallet_receiving_plans (
+                    receipt_code,
+                    receiving_date,
+                    company_id,
+                    project_id,
+                    item_id,
+                    pallet_count,
+                    qty_per_pallet,
+                    total_qty,
+                    status,
+                    remarks,
+                    created_by,
+                    created_at,
+                    updated_at
+                )
+                VALUES (
+                    ?, ?, ?, ?, ?, ?, ?, ?,
+                    '入庫待ち', ?, ?, ?, ?
+                )
+                """,
+                (
+                    temporary_code,
+                    plan["receiving_date"].isoformat(),
+                    plan["company_id"],
+                    plan["project_id"],
+                    plan["item_id"],
+                    plan["pallet_count"],
+                    plan["qty_per_pallet"],
+                    plan["total_qty"],
+                    plan["remarks"] or None,
+                    username,
+                    now,
+                    now,
+                ),
+            )
+            receipt_code = (
+                f"IN-{plan['receiving_date']:%y%m%d}-{plan_id:03d}"
+            )
+            _execute(
+                conn,
+                """
+                UPDATE pallet_receiving_plans
+                SET receipt_code = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (receipt_code, now, plan_id),
+            )
+            receipt_codes.append(receipt_code)
+
+        conn.commit()
+        return receipt_codes
+
+    except Exception:
+        _rollback_safely(conn)
+        raise
+
+
+def create_receiving_plan(
+    conn,
+    receiving_date,
+    company_id,
+    project_id,
+    item_id,
+    pallet_count,
+    qty_per_pallet,
+    username,
+    remarks="",
+):
+    """入庫予定を1件登録する。"""
+
+    codes = create_receiving_plans(
+        conn=conn,
+        plans=[
+            {
+                "receiving_date": receiving_date,
+                "company_id": company_id,
+                "project_id": project_id,
+                "item_id": item_id,
+                "pallet_count": pallet_count,
+                "qty_per_pallet": qty_per_pallet,
+                "remarks": remarks,
+            }
+        ],
+        username=username,
+    )
+    return codes[0]
+
+
+def get_receiving_plan_by_code(conn, receipt_or_pallet_code):
+    """入庫管理番号または管理票QRから入庫予定を取得する。"""
+
+    receipt_code = _normalize_receipt_code(receipt_or_pallet_code)
+
+    if not receipt_code:
+        return None
+
+    cursor = _execute(
+        conn,
+        f"""
+        SELECT
+            rp.id,
+            rp.receipt_code,
+            rp.receiving_date,
+            rp.company_id,
+            rp.project_id,
+            rp.item_id,
+            rp.pallet_count,
+            rp.qty_per_pallet,
+            rp.total_qty,
+            rp.status,
+            rp.batch_code,
+            rp.remarks,
+            rp.created_by,
+            rp.created_at,
+            rp.updated_at,
+            rp.confirmed_by,
+            rp.confirmed_at,
+            c.code AS company_code,
+            c.name AS company_name,
+            p.code AS project_code,
+            p.name AS project_name,
+            i.code AS item_code,
+            i.name AS item_name
+        FROM pallet_receiving_plans rp
+        LEFT JOIN companies c
+            ON c.id = rp.company_id
+        LEFT JOIN projects p
+            ON p.id = rp.project_id
+        LEFT JOIN items i
+            ON i.id = rp.item_id
+        WHERE
+            rp.receipt_code = ?
+            AND {_not_deleted_condition("rp.is_deleted")}
+        LIMIT 1
+        """,
+        (receipt_code,),
+    )
+    return _fetchone_dict(cursor)
+
+
+def list_receiving_plans(conn, status="入庫待ち", limit=500):
+    """入庫予定を新しい順で取得する。"""
+
+    conditions = [_not_deleted_condition("rp.is_deleted")]
+    params = []
+
+    if status and status != "すべて":
+        conditions.append("rp.status = ?")
+        params.append(status)
+
+    params.append(int(limit))
+    where_clause = " AND ".join(conditions)
+    cursor = _execute(
+        conn,
+        f"""
+        SELECT
+            rp.id,
+            rp.receipt_code,
+            rp.receiving_date,
+            rp.company_id,
+            rp.project_id,
+            rp.item_id,
+            rp.pallet_count,
+            rp.qty_per_pallet,
+            rp.total_qty,
+            rp.status,
+            rp.batch_code,
+            rp.remarks,
+            rp.created_by,
+            rp.created_at,
+            rp.confirmed_by,
+            rp.confirmed_at,
+            c.code AS company_code,
+            c.name AS company_name,
+            p.code AS project_code,
+            p.name AS project_name,
+            i.code AS item_code,
+            i.name AS item_name
+        FROM pallet_receiving_plans rp
+        LEFT JOIN companies c
+            ON c.id = rp.company_id
+        LEFT JOIN projects p
+            ON p.id = rp.project_id
+        LEFT JOIN items i
+            ON i.id = rp.item_id
+        WHERE {where_clause}
+        ORDER BY
+            rp.receiving_date DESC,
+            rp.id DESC
+        LIMIT ?
+        """,
+        tuple(params),
+    )
+    return _fetchall_dict(cursor)
+
+
+def cancel_receiving_plan(conn, receipt_code):
+    """未確定の入庫予定を取消にする。"""
+
+    plan = get_receiving_plan_by_code(conn, receipt_code)
+
+    if plan is None:
+        raise PalletNotFoundError(
+            f"入庫管理番号「{receipt_code}」が見つかりません。"
+        )
+
+    if plan["status"] != "入庫待ち":
+        raise PalletStockError(
+            "入庫待ち以外の管理票は取り消せません。"
+        )
+
+    try:
+        cursor = _execute(
+            conn,
+            f"""
+            UPDATE pallet_receiving_plans
+            SET status = '取消', updated_at = ?
+            WHERE
+                id = ?
+                AND status = '入庫待ち'
+                AND {_not_deleted_condition("is_deleted")}
+            """,
+            (_now(), int(plan["id"])),
+        )
+        rowcount = _cursor_attribute(cursor, "rowcount")
+
+        if rowcount is not None and rowcount != 1:
+            raise PalletConflictError(
+                "別の端末で入庫予定が更新されました。"
+            )
+
+        conn.commit()
+        return plan["receipt_code"]
+
+    except Exception:
+        _rollback_safely(conn)
+        raise
+
+
+def confirm_receiving_plan(conn, receipt_or_pallet_code, username):
+    """管理票QRを在庫と入庫履歴へ確定登録する。"""
+
+    plan = get_receiving_plan_by_code(conn, receipt_or_pallet_code)
+
+    if plan is None:
+        raise PalletNotFoundError(
+            "入庫管理票が見つかりません。QRを確認してください。"
+        )
+
+    if plan["status"] == "入庫済み":
+        raise PalletStockError(
+            f"{plan['receipt_code']} はすでに入庫登録済みです。"
+        )
+
+    if plan["status"] != "入庫待ち":
+        raise PalletStockError("取り消された管理票は入庫できません。")
+
+    pallet_count = int(plan["pallet_count"])
+    quantity = int(plan["qty_per_pallet"])
+    allocations = [
+        {
+            "パレット番号": f"{index:03d} / {pallet_count:03d}",
+            "個数": quantity,
+        }
+        for index in range(1, pallet_count + 1)
+    ]
+    pallet_codes = [
+        f"{plan['receipt_code']}-P{index:03d}"
+        for index in range(1, pallet_count + 1)
+    ]
+    now = _now()
+
+    try:
+        batch_code = create_pallet_batch(
+            conn=conn,
+            company_id=plan["company_id"],
+            project_id=plan["project_id"],
+            item_id=plan["item_id"],
+            allocations=allocations,
+            username=username,
+            remarks=plan["remarks"] or "",
+            pallet_codes=pallet_codes,
+            commit=False,
+        )
+        cursor = _execute(
+            conn,
+            f"""
+            UPDATE pallet_receiving_plans
+            SET
+                status = '入庫済み',
+                batch_code = ?,
+                confirmed_by = ?,
+                confirmed_at = ?,
+                updated_at = ?
+            WHERE
+                id = ?
+                AND status = '入庫待ち'
+                AND {_not_deleted_condition("is_deleted")}
+            """,
+            (
+                batch_code,
+                username,
+                now,
+                now,
+                int(plan["id"]),
+            ),
+        )
+        rowcount = _cursor_attribute(cursor, "rowcount")
+
+        if rowcount is not None and rowcount != 1:
+            raise PalletConflictError(
+                "別の端末で入庫登録されました。"
+                "重複登録はしていません。"
+            )
+
+        conn.commit()
+        return {
+            "receipt_code": plan["receipt_code"],
+            "batch_code": batch_code,
+            "pallet_count": pallet_count,
+            "total_qty": int(plan["total_qty"]),
+        }
 
     except Exception:
         _rollback_safely(conn)

@@ -1,4 +1,5 @@
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
+from io import BytesIO
 
 import pandas as pd
 import streamlit as st
@@ -7,18 +8,27 @@ from auth import check_login
 from database import get_connection
 from pages.pallet.pallet_db import (
     PalletError,
+    cancel_receiving_plan,
+    confirm_receiving_plan,
     create_pallet_batch,
+    create_receiving_plan,
+    create_receiving_plans,
     delete_pallet_batch,
     get_batch_pallets,
     get_items_for_company,
     get_pallet_by_code,
+    get_receiving_plan_by_code,
     list_editable_pallet_batches,
     list_pallet_history,
     list_pallet_stock,
+    list_receiving_plans,
     ship_pallet,
     update_pallet_batch,
 )
-from pages.pallet.pallet_documents import create_pallet_a4_pdf
+from pages.pallet.pallet_documents import (
+    create_pallet_a4_pdf,
+    create_receiving_plan_a4_pdf,
+)
 from pages.pallet.pallet_tables import (
     PalletSchemaError,
     validate_pallet_database,
@@ -40,8 +50,9 @@ try:
 except PalletSchemaError as exc:
     st.error(str(exc))
     st.info(
-        "SHARKを停止し、同梱の再構築スクリプトを"
-        "一度だけ実行してから再起動してください。"
+        "既存のパレット環境は、SHARKを停止して"
+        "INSTALL_PALLET_RECEIVING_PLANS.py を一度だけ実行し、"
+        "再起動してください。"
     )
     conn.close()
     st.stop()
@@ -65,6 +76,17 @@ st.success(f"ログイン中：{display_name}")
 # セッション初期化
 # ============================================================
 SESSION_DEFAULTS = {
+    "receiving_plan_preview": None,
+    "receiving_plan_last_pdf": None,
+    "receiving_plan_last_pdf_name": "",
+    "receiving_plan_last_code": "",
+    "receiving_plan_flash": "",
+    "receiving_plan_scan_target": None,
+    "receiving_plan_confirm_flash": "",
+    "receiving_plan_csv_pdf": None,
+    "receiving_plan_csv_pdf_name": "",
+    "receiving_plan_csv_flash": "",
+    "receiving_plan_csv_uploader_version": 0,
     "pallet_preview": None,
     "pallet_received_qty": 1,
     "pallet_count": 1,
@@ -240,12 +262,273 @@ def history_dataframe(rows):
     return pd.DataFrame(data)
 
 
+def format_date(value):
+    if isinstance(value, datetime):
+        value = value.date()
+
+    if isinstance(value, date):
+        return value.strftime("%Y-%m-%d")
+
+    return str(value or "")[:10]
+
+
+def company_option_map(companies):
+    options = {}
+
+    for company in companies:
+        company_id = int(row_value(company, "id", 0))
+        company_code = str(row_value(company, "code", "") or "").strip()
+        company_name = str(
+            row_value(company, "name", "名称なし") or "名称なし"
+        ).strip()
+        label = (
+            f"{company_code} - {company_name}"
+            if company_code
+            else company_name
+        )
+        options[label] = {
+            "id": company_id,
+            "code": company_code,
+            "name": company_name,
+        }
+
+    return options
+
+
+def item_option_map(items):
+    options = {}
+
+    for item in items:
+        item_id = int(row_value(item, "id", 0))
+        item_code = str(row_value(item, "code", "") or "").strip()
+        item_name = str(row_value(item, "name", "") or "").strip()
+        label = f"{item_code} - {item_name}" if item_code else item_name
+
+        if label in options:
+            label = f"{label}（商品ID：{item_id}）"
+
+        options[label] = {
+            "id": item_id,
+            "code": item_code,
+            "name": item_name,
+            "project_id": row_value(item, "project_id"),
+        }
+
+    return options
+
+
+def receiving_plan_dataframe(rows):
+    return pd.DataFrame(
+        [
+            {
+                "入庫管理番号": row_value(row, "receipt_code", ""),
+                "入庫日": format_date(
+                    row_value(row, "receiving_date", "")
+                ),
+                "顧客": row_value(row, "company_name", ""),
+                "商品名": row_value(row, "item_name", ""),
+                "パレット枚数": int(
+                    row_value(row, "pallet_count", 0)
+                ),
+                "1パレット商品数": int(
+                    row_value(row, "qty_per_pallet", 0)
+                ),
+                "商品総数": int(row_value(row, "total_qty", 0)),
+                "状態": row_value(row, "status", ""),
+            }
+            for row in rows
+        ]
+    )
+
+
+def _normalized_master_value(value):
+    try:
+        if pd.isna(value):
+            return ""
+    except (TypeError, ValueError):
+        pass
+
+    return str(value or "").strip().casefold()
+
+
+def validate_receiving_csv(dataframe, companies, items):
+    required_columns = [
+        "入庫日",
+        "顧客",
+        "商品名",
+        "パレット枚数",
+        "1パレットあたりの商品個数",
+    ]
+    missing_columns = [
+        column
+        for column in required_columns
+        if column not in dataframe.columns
+    ]
+
+    if missing_columns:
+        return [], [
+            "不足列：" + "、".join(missing_columns)
+        ]
+
+    company_rows = []
+
+    for company in companies:
+        company_rows.append(
+            {
+                "id": int(row_value(company, "id", 0)),
+                "code": _normalized_master_value(
+                    row_value(company, "code", "")
+                ),
+                "name": _normalized_master_value(
+                    row_value(company, "name", "")
+                ),
+            }
+        )
+
+    item_rows = []
+
+    for item in items:
+        item_rows.append(
+            {
+                "id": int(row_value(item, "id", 0)),
+                "code": _normalized_master_value(
+                    row_value(item, "code", "")
+                ),
+                "name": _normalized_master_value(
+                    row_value(item, "name", "")
+                ),
+                "project_id": row_value(item, "project_id"),
+            }
+        )
+
+    valid_plans = []
+    errors = []
+
+    for source_index, row in dataframe.iterrows():
+        row_number = int(source_index) + 2
+
+        if all(pd.isna(row[column]) for column in required_columns):
+            continue
+
+        company_text = _normalized_master_value(row["顧客"])
+        company_matches = [
+            company
+            for company in company_rows
+            if company_text in {company["code"], company["name"]}
+        ]
+
+        if len(company_matches) != 1:
+            errors.append(
+                f"{row_number}行目：顧客「{row['顧客']}」を"
+                "企業マスターから1件に特定できません。"
+            )
+            continue
+
+        optional_item_code = ""
+
+        if "商品コード" in dataframe.columns:
+            optional_item_code = _normalized_master_value(
+                row.get("商品コード", "")
+            )
+
+        item_name = _normalized_master_value(row["商品名"])
+
+        if optional_item_code:
+            item_matches = [
+                item
+                for item in item_rows
+                if item["code"] == optional_item_code
+            ]
+        else:
+            item_matches = [
+                item
+                for item in item_rows
+                if item["name"] == item_name
+            ]
+
+        if len(item_matches) != 1:
+            errors.append(
+                f"{row_number}行目：商品「{row['商品名']}」を"
+                "商品マスターから1件に特定できません。"
+                "同名商品がある場合は商品コード列を追加してください。"
+            )
+            continue
+
+        parsed_date = pd.to_datetime(row["入庫日"], errors="coerce")
+
+        if pd.isna(parsed_date):
+            errors.append(
+                f"{row_number}行目：入庫日の形式が正しくありません。"
+            )
+            continue
+
+        try:
+            pallet_count_value = float(row["パレット枚数"])
+            qty_value = float(row["1パレットあたりの商品個数"])
+
+            if (
+                not pallet_count_value.is_integer()
+                or not qty_value.is_integer()
+            ):
+                raise ValueError
+
+            pallet_count = int(pallet_count_value)
+            qty_per_pallet = int(qty_value)
+        except (TypeError, ValueError):
+            errors.append(
+                f"{row_number}行目：パレット枚数と商品個数は"
+                "整数で入力してください。"
+            )
+            continue
+
+        if not (1 <= pallet_count <= 1000):
+            errors.append(
+                f"{row_number}行目：パレット枚数は"
+                "1～1,000枚で入力してください。"
+            )
+            continue
+
+        if not (1 <= qty_per_pallet <= 1_000_000):
+            errors.append(
+                f"{row_number}行目：1パレットの商品個数は"
+                "1～1,000,000個で入力してください。"
+            )
+            continue
+
+        company = company_matches[0]
+        item = item_matches[0]
+        valid_plans.append(
+            {
+                "receiving_date": parsed_date.date(),
+                "company_id": company["id"],
+                "project_id": item["project_id"],
+                "item_id": item["id"],
+                "pallet_count": pallet_count,
+                "qty_per_pallet": qty_per_pallet,
+            }
+        )
+
+    if not valid_plans and not errors:
+        errors.append("登録できるデータ行がありません。")
+
+    return valid_plans, errors
+
+
 # ============================================================
 # タブ
 # ============================================================
-tab_receiving, tab_shipping, tab_stock, tab_history = st.tabs(
+(
+    tab_receiving_plan,
+    tab_receiving_confirm,
+    tab_receiving,
+    tab_shipping,
+    tab_stock,
+    tab_history,
+) = st.tabs(
     [
-        "入庫登録",
+        "事前登録・A4",
+        "QR入庫",
+        "直接入庫",
         "QR出庫",
         "在庫確認",
         "入出庫履歴",
@@ -254,18 +537,584 @@ tab_receiving, tab_shipping, tab_stock, tab_history = st.tabs(
 
 
 # ============================================================
-# 入庫登録
+# 事前登録・A4発行（パターン1）
 # ============================================================
-with tab_receiving:
-    st.subheader("入庫登録")
-
+with tab_receiving_plan:
+    st.subheader("入庫予定を事前登録してA4管理票を発行")
     st.info(
-        "荷主・商品・入庫数量・パレット枚数を入力し、"
-        "パレットごとの数量を作成します。"
+        "入庫前に入力してA4横向き管理票を印刷します。"
+        "管理票は1パレットにつき1ページです。"
     )
     st.caption(
-        "荷主と案件は既存DB上で直接紐づいていないため、"
-        "荷主と商品はそれぞれ選択してください。"
+        "案件の選択は廃止しています。商品に紐づく案件情報だけを"
+        "DB内部で引き継ぎます。"
+    )
+
+    if st.session_state.receiving_plan_flash:
+        st.success(st.session_state.receiving_plan_flash)
+        st.session_state.receiving_plan_flash = ""
+
+    if st.session_state.receiving_plan_last_pdf is not None:
+        st.download_button(
+            "📄 A4横向き管理票を開く・ダウンロード",
+            data=st.session_state.receiving_plan_last_pdf,
+            file_name=st.session_state.receiving_plan_last_pdf_name,
+            mime="application/pdf",
+            use_container_width=True,
+        )
+        st.caption(
+            "PDFを開いて Ctrl＋P で印刷してください。"
+            f" 入庫管理番号：{st.session_state.receiving_plan_last_code}"
+        )
+
+    plan_form_tab, plan_csv_tab, plan_list_tab = st.tabs(
+        ["入力フォーム", "CSV一括登録", "入庫待ち一覧"]
+    )
+
+    master_companies = conn.execute(
+        """
+        SELECT id, code, name
+        FROM companies
+        ORDER BY code, name
+        """
+    ).fetchall()
+    master_items = get_items_for_company(conn=conn, company_id=None)
+    plan_company_map = company_option_map(master_companies)
+    plan_item_map = item_option_map(master_items)
+
+    with plan_form_tab:
+        if not plan_company_map:
+            st.warning("企業マスターに顧客が登録されていません。")
+        elif not plan_item_map:
+            st.warning("商品マスターに商品が登録されていません。")
+        else:
+            with st.form("receiving_plan_input_form"):
+                receiving_date_value = st.date_input(
+                    "入庫日",
+                    value=date.today(),
+                )
+                company_label = st.selectbox(
+                    "顧客",
+                    options=list(plan_company_map.keys()),
+                )
+                item_label = st.selectbox(
+                    "商品名",
+                    options=list(plan_item_map.keys()),
+                )
+                count_col, quantity_col = st.columns(2)
+
+                with count_col:
+                    plan_pallet_count = st.number_input(
+                        "パレット枚数",
+                        min_value=1,
+                        max_value=1000,
+                        value=1,
+                        step=1,
+                    )
+
+                with quantity_col:
+                    plan_qty_per_pallet = st.number_input(
+                        "1パレットあたりの商品個数",
+                        min_value=1,
+                        max_value=1_000_000,
+                        value=1,
+                        step=1,
+                    )
+
+                preview_submitted = st.form_submit_button(
+                    "入力内容を確認",
+                    type="primary",
+                    use_container_width=True,
+                )
+
+            if preview_submitted:
+                selected_company = plan_company_map[company_label]
+                selected_item = plan_item_map[item_label]
+                st.session_state.receiving_plan_preview = {
+                    "receiving_date": receiving_date_value,
+                    "company_id": selected_company["id"],
+                    "company_name": selected_company["name"],
+                    "project_id": selected_item["project_id"],
+                    "item_id": selected_item["id"],
+                    "item_name": selected_item["name"],
+                    "item_code": selected_item["code"],
+                    "pallet_count": int(plan_pallet_count),
+                    "qty_per_pallet": int(plan_qty_per_pallet),
+                    "total_qty": (
+                        int(plan_pallet_count)
+                        * int(plan_qty_per_pallet)
+                    ),
+                }
+
+            plan_preview = st.session_state.receiving_plan_preview
+
+            if plan_preview is not None:
+                st.divider()
+                st.subheader("登録・印刷内容の確認")
+                preview_col1, preview_col2, preview_col3 = st.columns(3)
+
+                with preview_col1:
+                    st.metric(
+                        "入庫日",
+                        format_date(plan_preview["receiving_date"]),
+                    )
+                    st.metric("顧客", plan_preview["company_name"])
+
+                with preview_col2:
+                    st.metric("商品名", plan_preview["item_name"])
+                    st.metric(
+                        "パレット枚数",
+                        f"{plan_preview['pallet_count']:,} 枚",
+                    )
+
+                with preview_col3:
+                    st.metric(
+                        "1パレットの商品数",
+                        f"{plan_preview['qty_per_pallet']:,} 個",
+                    )
+                    st.metric(
+                        "商品総数",
+                        f"{plan_preview['total_qty']:,} 個",
+                    )
+
+                st.warning(
+                    "この内容で事前登録し、A4をプリントアウトしますか？"
+                )
+                ok_col, back_col = st.columns(2)
+
+                with ok_col:
+                    create_plan_submitted = st.button(
+                        "OK：登録してA4 PDFを作成",
+                        type="primary",
+                        use_container_width=True,
+                    )
+
+                with back_col:
+                    return_to_input = st.button(
+                        "入力を修正する",
+                        use_container_width=True,
+                    )
+
+                if return_to_input:
+                    st.session_state.receiving_plan_preview = None
+                    st.rerun()
+
+                if create_plan_submitted:
+                    try:
+                        receipt_code = create_receiving_plan(
+                            conn=conn,
+                            receiving_date=plan_preview[
+                                "receiving_date"
+                            ],
+                            company_id=plan_preview["company_id"],
+                            project_id=plan_preview["project_id"],
+                            item_id=plan_preview["item_id"],
+                            pallet_count=plan_preview["pallet_count"],
+                            qty_per_pallet=plan_preview[
+                                "qty_per_pallet"
+                            ],
+                            username=username,
+                        )
+                        registered_plan = get_receiving_plan_by_code(
+                            conn,
+                            receipt_code,
+                        )
+                        pdf_data = create_receiving_plan_a4_pdf(
+                            [registered_plan]
+                        )
+                        st.session_state.receiving_plan_last_pdf = pdf_data
+                        st.session_state.receiving_plan_last_pdf_name = (
+                            f"receiving_{receipt_code}.pdf"
+                        )
+                        st.session_state.receiving_plan_last_code = (
+                            receipt_code
+                        )
+                        st.session_state.receiving_plan_flash = (
+                            "事前登録が完了しました！"
+                            f" A4は{plan_preview['pallet_count']:,}ページです。"
+                        )
+                        st.session_state.receiving_plan_preview = None
+                        st.rerun()
+
+                    except PalletError as exc:
+                        st.error(str(exc))
+
+                    except Exception as exc:
+                        st.error(
+                            "入庫予定の登録中にエラーが"
+                            f"発生しました：{exc}"
+                        )
+
+    with plan_csv_tab:
+        st.write("複数の入庫予定をCSVからまとめて登録できます。")
+        csv_template = pd.DataFrame(
+            [
+                {
+                    "入庫日": date.today().isoformat(),
+                    "顧客": "顧客名",
+                    "商品名": "商品名",
+                    "パレット枚数": 1,
+                    "1パレットあたりの商品個数": 1,
+                }
+            ]
+        )
+        st.download_button(
+            "CSVひな形をダウンロード",
+            data=csv_template.to_csv(
+                index=False
+            ).encode("utf-8-sig"),
+            file_name="pallet_receiving_template.csv",
+            mime="text/csv",
+        )
+        st.caption(
+            "顧客・商品名はマスターと同じ表記にしてください。"
+            "同名商品がある場合は任意の「商品コード」列を追加できます。"
+        )
+
+        if st.session_state.receiving_plan_csv_flash:
+            st.success(st.session_state.receiving_plan_csv_flash)
+            st.session_state.receiving_plan_csv_flash = ""
+
+        if st.session_state.receiving_plan_csv_pdf is not None:
+            st.download_button(
+                "📄 CSV登録分のA4管理票をダウンロード",
+                data=st.session_state.receiving_plan_csv_pdf,
+                file_name=st.session_state.receiving_plan_csv_pdf_name,
+                mime="application/pdf",
+                use_container_width=True,
+            )
+
+        uploaded_csv = st.file_uploader(
+            "入庫予定CSV",
+            type=["csv"],
+            key=(
+                "receiving_plan_csv_file_"
+                f"{st.session_state.receiving_plan_csv_uploader_version}"
+            ),
+        )
+
+        if uploaded_csv is not None:
+            try:
+                csv_bytes = uploaded_csv.getvalue()
+
+                try:
+                    csv_dataframe = pd.read_csv(
+                        BytesIO(csv_bytes),
+                        encoding="utf-8-sig",
+                        dtype=object,
+                    )
+                except UnicodeDecodeError:
+                    csv_dataframe = pd.read_csv(
+                        BytesIO(csv_bytes),
+                        encoding="cp932",
+                        dtype=object,
+                    )
+
+                csv_plans, csv_errors = validate_receiving_csv(
+                    csv_dataframe,
+                    master_companies,
+                    master_items,
+                )
+
+                if csv_errors:
+                    st.error("CSVに修正が必要です。")
+
+                    for error_message in csv_errors:
+                        st.write(f"- {error_message}")
+
+                else:
+                    csv_required_columns = [
+                        "入庫日",
+                        "顧客",
+                        "商品名",
+                        "パレット枚数",
+                        "1パレットあたりの商品個数",
+                    ]
+                    csv_preview = csv_dataframe.loc[
+                        ~csv_dataframe[csv_required_columns]
+                        .isna()
+                        .all(axis=1)
+                    ].copy()
+                    csv_preview["商品総数"] = [
+                        int(plan["pallet_count"])
+                        * int(plan["qty_per_pallet"])
+                        for plan in csv_plans
+                    ]
+                    st.dataframe(
+                        csv_preview,
+                        hide_index=True,
+                        use_container_width=True,
+                    )
+                    csv_total_pages = sum(
+                        int(plan["pallet_count"])
+                        for plan in csv_plans
+                    )
+                    st.info(
+                        f"入庫予定 {len(csv_plans):,}件・"
+                        f"A4 {csv_total_pages:,}ページを作成します。"
+                    )
+
+                    if st.button(
+                        "CSVを登録してA4 PDFを作成",
+                        type="primary",
+                        use_container_width=True,
+                    ):
+                        receipt_codes = create_receiving_plans(
+                            conn=conn,
+                            plans=csv_plans,
+                            username=username,
+                        )
+                        registered_plans = [
+                            get_receiving_plan_by_code(conn, code)
+                            for code in receipt_codes
+                        ]
+                        csv_pdf = create_receiving_plan_a4_pdf(
+                            registered_plans
+                        )
+                        st.session_state.receiving_plan_csv_pdf = (
+                            csv_pdf
+                        )
+                        st.session_state.receiving_plan_csv_pdf_name = (
+                            "pallet_receiving_csv_"
+                            f"{datetime.now(JST):%Y%m%d_%H%M%S}.pdf"
+                        )
+                        st.session_state.receiving_plan_csv_flash = (
+                            f"{len(receipt_codes):,}件を事前登録しました！"
+                        )
+                        st.session_state[
+                            "receiving_plan_csv_uploader_version"
+                        ] += 1
+                        st.rerun()
+
+            except PalletError as exc:
+                st.error(str(exc))
+
+            except Exception as exc:
+                st.error(f"CSVの処理中にエラーが発生しました：{exc}")
+
+    with plan_list_tab:
+        pending_plans = list_receiving_plans(
+            conn,
+            status="入庫待ち",
+        )
+
+        if not pending_plans:
+            st.info("現在、入庫待ちの管理票はありません。")
+        else:
+            st.dataframe(
+                receiving_plan_dataframe(pending_plans),
+                hide_index=True,
+                use_container_width=True,
+            )
+            pending_map = {
+                (
+                    f"{row_value(plan, 'receipt_code', '')}｜"
+                    f"{row_value(plan, 'company_name', '')}｜"
+                    f"{row_value(plan, 'item_name', '')}"
+                ): plan
+                for plan in pending_plans
+            }
+            pending_label = st.selectbox(
+                "管理票の再発行・取消",
+                options=list(pending_map.keys()),
+            )
+            pending_plan = pending_map[pending_label]
+            pending_pdf = create_receiving_plan_a4_pdf([pending_plan])
+            st.download_button(
+                "選択したA4管理票を再発行",
+                data=pending_pdf,
+                file_name=(
+                    "receiving_"
+                    f"{row_value(pending_plan, 'receipt_code', '')}.pdf"
+                ),
+                mime="application/pdf",
+                use_container_width=True,
+            )
+
+            with st.expander("この入庫予定を取り消す"):
+                with st.form("cancel_receiving_plan_form"):
+                    receipt_code_to_cancel = row_value(
+                        pending_plan,
+                        "receipt_code",
+                        "",
+                    )
+                    cancel_checked = st.checkbox(
+                        f"{receipt_code_to_cancel} を取り消す"
+                    )
+                    cancel_submitted = st.form_submit_button(
+                        "入庫予定を取消",
+                        use_container_width=True,
+                    )
+
+                if cancel_submitted:
+                    if not cancel_checked:
+                        st.warning("取消確認にチェックを入れてください。")
+                    else:
+                        try:
+                            cancel_receiving_plan(
+                                conn,
+                                receipt_code_to_cancel,
+                            )
+                            st.session_state.receiving_plan_flash = (
+                                f"{receipt_code_to_cancel} を取り消しました。"
+                            )
+                            st.rerun()
+                        except PalletError as exc:
+                            st.error(str(exc))
+
+
+# ============================================================
+# QR入庫確定（パターン1）
+# ============================================================
+with tab_receiving_confirm:
+    st.subheader("A4管理票のQRを読み取って入庫確定")
+    st.info(
+        "印刷済みA4管理票のQRを読み取ります。"
+        "どのパレットのQRでも入庫予定全体を呼び出せます。"
+    )
+
+    if st.session_state.receiving_plan_confirm_flash:
+        st.success(st.session_state.receiving_plan_confirm_flash)
+        st.session_state.receiving_plan_confirm_flash = ""
+
+    with st.form("receiving_plan_qr_form", clear_on_submit=True):
+        receiving_qr_code = st.text_input(
+            "入庫管理票QR",
+            placeholder="IN-260731-001-P001",
+        )
+        receiving_qr_submitted = st.form_submit_button(
+            "QRを確認",
+            type="primary",
+            use_container_width=True,
+        )
+
+    if receiving_qr_submitted:
+        normalized_receiving_qr = str(
+            receiving_qr_code or ""
+        ).strip().upper()
+
+        if not normalized_receiving_qr:
+            st.warning("QRコードを読み取ってください。")
+        else:
+            st.session_state.receiving_plan_scan_target = (
+                normalized_receiving_qr
+            )
+
+    receiving_scan_target = (
+        st.session_state.receiving_plan_scan_target
+    )
+
+    if receiving_scan_target:
+        receiving_plan = get_receiving_plan_by_code(
+            conn,
+            receiving_scan_target,
+        )
+
+        if receiving_plan is None:
+            st.error("入庫管理票が見つかりません。")
+            st.session_state.receiving_plan_scan_target = None
+        else:
+            st.divider()
+            st.write(
+                f"**入庫管理番号：** "
+                f"{row_value(receiving_plan, 'receipt_code', '')}"
+            )
+            detail_col1, detail_col2, detail_col3 = st.columns(3)
+
+            with detail_col1:
+                st.metric(
+                    "入庫日",
+                    format_date(
+                        row_value(receiving_plan, "receiving_date", "")
+                    ),
+                )
+                st.metric(
+                    "顧客",
+                    row_value(receiving_plan, "company_name", ""),
+                )
+
+            with detail_col2:
+                st.metric(
+                    "商品名",
+                    row_value(receiving_plan, "item_name", ""),
+                )
+                st.metric(
+                    "パレット枚数",
+                    f"{int(row_value(receiving_plan, 'pallet_count', 0)):,} 枚",
+                )
+
+            with detail_col3:
+                st.metric(
+                    "1パレットの商品数",
+                    f"{int(row_value(receiving_plan, 'qty_per_pallet', 0)):,} 個",
+                )
+                st.metric(
+                    "商品総数",
+                    f"{int(row_value(receiving_plan, 'total_qty', 0)):,} 個",
+                )
+
+            plan_status = row_value(receiving_plan, "status", "")
+
+            if plan_status == "入庫待ち":
+                st.warning(
+                    "内容と現物を確認してから入庫確定してください。"
+                    "確定すると商品総数で入庫履歴に登録されます。"
+                )
+
+                if st.button(
+                    "✅ この内容で入庫確定",
+                    type="primary",
+                    use_container_width=True,
+                ):
+                    try:
+                        result = confirm_receiving_plan(
+                            conn=conn,
+                            receipt_or_pallet_code=(
+                                receiving_scan_target
+                            ),
+                            username=username,
+                        )
+                        st.session_state.receiving_plan_confirm_flash = (
+                            f"{result['receipt_code']} を入庫登録しました！ "
+                            f"商品総数：{int(result['total_qty']):,}個"
+                        )
+                        st.session_state.receiving_plan_scan_target = None
+                        st.rerun()
+
+                    except PalletError as exc:
+                        st.error(str(exc))
+
+                    except Exception as exc:
+                        st.error(
+                            "入庫確定中にエラーが"
+                            f"発生しました：{exc}"
+                        )
+
+            elif plan_status == "入庫済み":
+                st.info(
+                    "この管理票は入庫登録済みです。"
+                    "印刷済みQRはそのままQR出庫に使えます。"
+                )
+            else:
+                st.error("この管理票は取り消されています。")
+
+            if st.button(
+                "読み取りをやり直す",
+                use_container_width=True,
+            ):
+                st.session_state.receiving_plan_scan_target = None
+                st.rerun()
+
+
+# ============================================================
+# 直接入庫登録（パターン2）
+# ============================================================
+with tab_receiving:
+    st.subheader("直接入庫登録")
+
+    st.info(
+        "A4の事前発行を使わず、その場で入庫登録する方式です。"
+        "パレットごとの数量を自動または手動で割り振れます。"
     )
 
     if st.session_state.pallet_receiving_flash:
