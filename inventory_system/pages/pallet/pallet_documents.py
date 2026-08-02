@@ -179,7 +179,7 @@ def _draw_qr(pdf, value, x, y, size):
 
 def create_pallet_a4_pdf(pallets):
     """
-    1パレットにつきA4を1ページ作る。
+    1パレットにつきA4横向きを1ページ作る。
 
     A4へ載せる内容：
     パレット番号、荷主、商品名、数量、入庫日、QRコード。
@@ -192,8 +192,9 @@ def create_pallet_a4_pdf(pallets):
 
     _register_font()
     buffer = BytesIO()
-    pdf = canvas.Canvas(buffer, pagesize=A4)
-    page_width, page_height = A4
+    page_size = landscape(A4)
+    pdf = canvas.Canvas(buffer, pagesize=page_size)
+    page_width, page_height = page_size
 
     for pallet in pallets:
         sequence = int(_value(pallet, "pallet_sequence", 1))
@@ -213,103 +214,96 @@ def create_pallet_a4_pdf(pallets):
             _value(pallet, "created_at", "")
         )
 
-        margin_x = 15 * mm
-        content_width = page_width - (margin_x * 2)
+        margin = 10 * mm
+        inner_x = margin + (7 * mm)
+        inner_top = page_height - margin - (7 * mm)
+        content_width = page_width - (2 * margin)
+        qr_size = 61 * mm
+        qr_x = page_width - margin - qr_size - (7 * mm)
+        qr_y = 22 * mm
+        left_width = qr_x - inner_x - (8 * mm)
 
-        pdf.setLineWidth(1.2)
+        pdf.setLineWidth(1.4)
         pdf.rect(
-            margin_x,
-            15 * mm,
+            margin,
+            margin,
             content_width,
-            page_height - (30 * mm),
+            page_height - (2 * margin),
         )
 
-        pdf.setFont(FONT_NAME, 20)
-        pdf.drawCentredString(
-            page_width / 2,
-            page_height - (25 * mm),
+        pdf.setFont(FONT_NAME, 19)
+        pdf.drawString(
+            inner_x,
+            inner_top - (2 * mm),
             "パレット票",
         )
-
-        pdf.setFont(FONT_NAME, 56)
-        pdf.drawCentredString(
-            page_width / 2,
-            page_height - (50 * mm),
+        pdf.setFont(FONT_NAME, 25)
+        pdf.drawRightString(
+            page_width - margin - (7 * mm),
+            inner_top - (2 * mm),
             pallet_number,
         )
 
-        top = page_height - (64 * mm)
-        row_height = 30 * mm
-        label_width = 34 * mm
-
-        for row_index in range(3):
-            row_y = top - ((row_index + 1) * row_height)
-            pdf.line(
-                margin_x,
-                row_y,
-                margin_x + content_width,
-                row_y,
-            )
-
+        header_line_y = inner_top - (10 * mm)
         pdf.line(
-            margin_x + label_width,
-            top,
-            margin_x + label_width,
-            top - (row_height * 3),
+            margin,
+            header_line_y,
+            page_width - margin,
+            header_line_y,
         )
 
-        labels = ["荷主", "商品名", "数量"]
-        values = [
-            company_name,
-            item_name,
-            f"{quantity:,} 個",
+        label_x = inner_x
+        value_x = inner_x + (32 * mm)
+        value_width = left_width - (32 * mm)
+
+        rows = [
+            ("入庫日", received_date, 26, header_line_y - (16 * mm)),
+            ("荷主", company_name, 27, header_line_y - (36 * mm)),
+            ("商品名", item_name, 25, header_line_y - (64 * mm)),
         ]
 
-        for row_index, (label, value) in enumerate(
-            zip(labels, values)
-        ):
-            row_top = top - (row_index * row_height)
-            center_y = row_top - (row_height / 2)
-
-            pdf.setFont(FONT_NAME, 16)
-            pdf.drawCentredString(
-                margin_x + (label_width / 2),
-                center_y - (5 * mm),
-                label,
-            )
-
-            value_center_x = (
-                margin_x
-                + label_width
-                + ((content_width - label_width) / 2)
-            )
-
-            value_font_size = 30 if label != "商品名" else 20
-            pdf.setFont(FONT_NAME, value_font_size)
-
+        for label, value, font_size, baseline_y in rows:
+            pdf.setFont(FONT_NAME, 14)
+            pdf.drawString(label_x, baseline_y, label)
+            pdf.setFont(FONT_NAME, font_size)
             _draw_centered_wrapped_text(
                 pdf=pdf,
                 text=value,
-                center_x=value_center_x,
-                top_y=center_y + (2 * mm),
-                max_width=content_width - label_width - (10 * mm),
-                font_size=value_font_size,
-                line_height=value_font_size + 3,
+                center_x=value_x + (value_width / 2),
+                top_y=baseline_y + (3 * mm),
+                max_width=value_width,
+                font_size=font_size,
+                line_height=font_size + 4,
                 max_lines=2,
             )
 
-        lower_top = top - (row_height * 3)
-
-        pdf.setFont(FONT_NAME, 16)
+        quantity_box_top = header_line_y - (94 * mm)
+        quantity_box_bottom = margin + (12 * mm)
+        pdf.rect(
+            inner_x,
+            quantity_box_bottom,
+            left_width,
+            quantity_box_top - quantity_box_bottom,
+        )
+        pdf.setFont(FONT_NAME, 14)
         pdf.drawString(
-            margin_x + (6 * mm),
-            lower_top - (14 * mm),
-            f"入庫日：{received_date}",
+            inner_x + (7 * mm),
+            quantity_box_top - (11 * mm),
+            "数量",
+        )
+        pdf.setFont(FONT_NAME, 34)
+        pdf.drawCentredString(
+            inner_x + (left_width / 2),
+            quantity_box_bottom + (10 * mm),
+            f"{quantity:,} 個",
         )
 
-        qr_size = 62 * mm
-        qr_x = (page_width - qr_size) / 2
-        qr_y = 28 * mm
+        pdf.setFont(FONT_NAME, 16)
+        pdf.drawCentredString(
+            qr_x + (qr_size / 2),
+            header_line_y - (20 * mm),
+            pallet_number,
+        )
 
         _draw_qr(
             pdf=pdf,
@@ -321,8 +315,8 @@ def create_pallet_a4_pdf(pallets):
 
         pdf.setFont(FONT_NAME, 12)
         pdf.drawCentredString(
-            page_width / 2,
-            22 * mm,
+            qr_x + (qr_size / 2),
+            16 * mm,
             pallet_code,
         )
 
