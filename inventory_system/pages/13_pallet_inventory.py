@@ -27,9 +27,7 @@ from pages.pallet.pallet_db import (
 )
 from pages.pallet.pallet_documents import (
     create_pallet_a4_pdf,
-    create_pallet_reprint_a4_pdf,
     create_receiving_plan_a4_pdf,
-    
 )
 from pages.pallet.pallet_tables import (
     PalletSchemaError,
@@ -1763,8 +1761,8 @@ with tab_stock:
             selected_print_row = printable_map[
                 selected_print_label
             ]
-            reprint_pdf = create_pallet_reprint_a4_pdf(
-            [selected_print_row]
+            reprint_pdf = create_pallet_a4_pdf(
+                [selected_print_row]
             )
             reprint_code = row_value(
                 selected_print_row,
