@@ -291,7 +291,7 @@ def create_pallet_a4_pdf(pallets):
             quantity_box_top - (11 * mm),
             "数量",
         )
-        pdf.setFont(FONT_NAME, 34)
+        pdf.setFont(FONT_NAME, 50)
         pdf.drawCentredString(
             inner_x + (left_width / 2),
             quantity_box_bottom + (10 * mm),
