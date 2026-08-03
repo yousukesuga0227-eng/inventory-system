@@ -1960,8 +1960,13 @@ def list_pallet_stock(
     search_text = str(search_text or "").strip()
 
     if search_text:
+        sequence_condition = ""
+
+        if search_text.isdigit():
+            sequence_condition = "OR pi.category_sequence = ?"
+
         conditions.append(
-            """
+            f"""
             (
                 LOWER(pi.pallet_code) LIKE LOWER(?)
                 OR LOWER(COALESCE(pi.category_name, '')) LIKE LOWER(?)
@@ -1974,11 +1979,15 @@ def list_pallet_stock(
                     COALESCE(NULLIF(pi.item_name, ''), i.name, '')
                 ) LIKE LOWER(?)
                 OR LOWER(COALESCE(pi.location, '')) LIKE LOWER(?)
+                {sequence_condition}
             )
             """
         )
         keyword = f"%{search_text}%"
         params.extend([keyword] * 7)
+
+        if sequence_condition:
+            params.append(int(search_text))
 
     where_clause = " AND ".join(conditions)
 
