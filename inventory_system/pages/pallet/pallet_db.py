@@ -1530,12 +1530,14 @@ def update_pallet_batch(
     allocations,
     item_code="",
     item_name="",
+    category_id=None,
 ):
     """
     未出庫の登録Noについて、荷主・商品・数量内訳を修正する。
 
     パレットコードと枚数は維持し、既存の入庫履歴も正しい商品数量へ
-    更新する。
+    更新する。大カテゴリーが「未分類」の登録に限り、登録済みの
+    大カテゴリーへ移してカテゴリー内番号を新しく採番できる。
     """
 
     normalized_batch_code, rows = _get_editable_batch_rows(
@@ -1579,10 +1581,74 @@ def update_pallet_batch(
         raise PalletStockError("商品名を入力してください。")
 
     try:
-        for row, quantity in zip(rows, quantities):
+        category_changed = False
+        target_category_id = None
+        target_category_name = ""
+        target_category_start_sequence = None
+
+        if category_id not in (None, ""):
+            target_category = _resolve_category(
+                conn=conn,
+                category_id=category_id,
+            )
+            requested_category_id = int(target_category["id"])
+            requested_category_name = str(target_category["name"])
+            already_target_category = all(
+                row.get("category_id") not in (None, "")
+                and int(row["category_id"]) == requested_category_id
+                for row in rows
+            )
+
+            if not already_target_category:
+                has_classified_row = any(
+                    str(row.get("category_name") or "未分類").strip()
+                    not in ("", "未分類")
+                    for row in rows
+                )
+
+                if has_classified_row:
+                    raise PalletStockError(
+                        "大カテゴリー設定済みの登録は、別の大カテゴリーへ"
+                        "変更できません。"
+                    )
+
+                if requested_category_name == "未分類":
+                    raise PalletStockError(
+                        "設定する大カテゴリーを選択してください。"
+                    )
+
+                target_category_id = requested_category_id
+                target_category_name = requested_category_name
+                target_category_start_sequence = (
+                    _reserve_category_sequences(
+                        conn,
+                        target_category_id,
+                        len(rows),
+                    )
+                )
+                category_changed = True
+
+        for row_index, (row, quantity) in enumerate(
+            zip(rows, quantities)
+        ):
             pallet_id = int(row["id"])
             old_initial_qty = int(row["initial_qty"])
             old_current_qty = int(row["current_qty"])
+            old_category_id = row.get("category_id")
+            old_category_sequence = row.get("category_sequence")
+
+            if category_changed:
+                updated_category_id = target_category_id
+                updated_category_name = target_category_name
+                updated_category_sequence = (
+                    target_category_start_sequence + row_index
+                )
+            else:
+                updated_category_id = old_category_id
+                updated_category_name = str(
+                    row.get("category_name") or "未分類"
+                ).strip()
+                updated_category_sequence = old_category_sequence
 
             cursor = _execute(
                 conn,
@@ -1594,6 +1660,9 @@ def update_pallet_batch(
                     item_id = ?,
                     item_code = ?,
                     item_name = ?,
+                    category_id = ?,
+                    category_name = ?,
+                    category_sequence = ?,
                     initial_qty = ?,
                     current_qty = ?,
                     updated_at = ?
@@ -1601,6 +1670,8 @@ def update_pallet_batch(
                     id = ?
                     AND initial_qty = ?
                     AND current_qty = ?
+                    AND COALESCE(category_id, -1) = ?
+                    AND COALESCE(category_sequence, -1) = ?
                     AND status = '保管中'
                     AND {_not_deleted_condition("is_deleted")}
                 """,
@@ -1610,12 +1681,25 @@ def update_pallet_batch(
                     item_id,
                     normalized_item_code,
                     normalized_item_name,
+                    updated_category_id,
+                    updated_category_name,
+                    updated_category_sequence,
                     quantity,
                     quantity,
                     now,
                     pallet_id,
                     old_initial_qty,
                     old_current_qty,
+                    (
+                        int(old_category_id)
+                        if old_category_id not in (None, "")
+                        else -1
+                    ),
+                    (
+                        int(old_category_sequence)
+                        if old_category_sequence not in (None, "")
+                        else -1
+                    ),
                 ),
             )
 
@@ -1663,6 +1747,17 @@ def update_pallet_batch(
             "batch_code": normalized_batch_code,
             "pallet_count": len(rows),
             "total_qty": sum(quantities),
+            "category_changed": category_changed,
+            "category_name": (
+                target_category_name
+                if category_changed
+                else str(rows[0].get("category_name") or "未分類")
+            ),
+            "category_start_sequence": (
+                target_category_start_sequence
+                if category_changed
+                else rows[0].get("category_sequence")
+            ),
         }
 
     except Exception:

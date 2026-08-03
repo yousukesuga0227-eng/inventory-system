@@ -2001,6 +2001,7 @@ with tab_history:
     st.subheader("誤登録の変更・削除")
     st.caption(
         "まだ一度も出庫していない登録Noだけ変更・削除できます。"
+        "未分類の登録には大カテゴリーを設定できます。"
         "パレットコードとパレット枚数は変更されません。"
     )
 
@@ -2025,6 +2026,10 @@ with tab_history:
             item_name = str(
                 row_value(batch, "item_name", "")
             )
+            category_name = str(
+                row_value(batch, "category_name", "未分類")
+                or "未分類"
+            )
             total_qty = int(
                 row_value(batch, "total_qty", 0)
             )
@@ -2033,7 +2038,7 @@ with tab_history:
             )
 
             label = (
-                f"{batch_code}｜{company_name}｜"
+                f"{batch_code}｜{category_name}｜{company_name}｜"
                 f"{item_code} {item_name}｜"
                 f"{total_qty:,}個・{pallet_count:,}枚"
             )
@@ -2073,6 +2078,17 @@ with tab_history:
             current_item_id = row_value(
                 edit_pallets[0],
                 "item_id",
+            )
+            current_category_name = str(
+                row_value(
+                    edit_pallets[0],
+                    "category_name",
+                    "未分類",
+                )
+                or "未分類"
+            ).strip()
+            category_is_unclassified = (
+                current_category_name in ("", "未分類")
             )
             current_item_code = str(
                 row_value(edit_pallets[0], "item_code", "") or ""
@@ -2165,6 +2181,21 @@ with tab_history:
                 0,
             )
 
+            edit_category_map = {
+                "未分類（変更しない）": None,
+            }
+
+            if category_is_unclassified:
+                for category in list_pallet_categories(conn):
+                    category_name = str(
+                        row_value(category, "name", "") or ""
+                    ).strip()
+
+                    if not category_name or category_name == "未分類":
+                        continue
+
+                    edit_category_map[category_name] = category
+
             with st.form(
                 f"pallet_batch_edit_form_"
                 f"{selected_edit_batch_code}"
@@ -2174,6 +2205,31 @@ with tab_history:
                     options=edit_company_labels,
                     index=current_company_index,
                 )
+
+                if category_is_unclassified:
+                    edit_category_label = st.selectbox(
+                        "大カテゴリー",
+                        options=list(edit_category_map.keys()),
+                        help=(
+                            "設定時に選択した大カテゴリーの続き番号を"
+                            "採番します。QRコード自体は変わりません。"
+                        ),
+                    )
+                    st.caption(
+                        "未分類から設定すると、新しい大カテゴリー内の"
+                        "番号へ自動で振り直します。"
+                    )
+                else:
+                    st.text_input(
+                        "大カテゴリー",
+                        value=current_category_name,
+                        disabled=True,
+                        help=(
+                            "設定済みの大カテゴリーは、番号の重複防止の"
+                            "ためこの画面では変更できません。"
+                        ),
+                    )
+
                 if free_name_batch:
                     edit_code_col, edit_name_col = st.columns(2)
 
@@ -2284,6 +2340,19 @@ with tab_history:
                     selected_edit_company = edit_company_map[
                         edit_company_label
                     ]
+                    selected_edit_category_id = None
+
+                    if category_is_unclassified:
+                        selected_edit_category = edit_category_map[
+                            edit_category_label
+                        ]
+
+                        if selected_edit_category is not None:
+                            selected_edit_category_id = row_value(
+                                selected_edit_category,
+                                "id",
+                            )
+
                     if free_name_batch:
                         selected_edit_project_id = None
                         selected_edit_item_id = None
@@ -2330,6 +2399,7 @@ with tab_history:
                         ),
                         item_code=selected_edit_item_code,
                         item_name=selected_edit_item_name,
+                        category_id=selected_edit_category_id,
                     )
 
                     revised_pallets = get_batch_pallets(
@@ -2352,6 +2422,11 @@ with tab_history:
                         "登録内容を変更しました！"
                         f" 商品総数："
                         f"{int(result['total_qty']):,}個"
+                        + (
+                            f" 大カテゴリー：{result['category_name']}"
+                            if result.get("category_changed")
+                            else ""
+                        )
                     )
                     st.rerun()
 
