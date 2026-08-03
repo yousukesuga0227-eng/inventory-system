@@ -10,6 +10,7 @@ from pages.pallet.pallet_db import (
     PalletError,
     cancel_receiving_plan,
     confirm_receiving_plan,
+    create_pallet_category,
     create_pallet_batch,
     create_receiving_plan,
     create_receiving_plans,
@@ -19,9 +20,11 @@ from pages.pallet.pallet_db import (
     get_pallet_by_code,
     get_receiving_plan_by_code,
     list_editable_pallet_batches,
+    list_pallet_categories,
     list_pallet_history,
     list_pallet_stock,
     list_receiving_plans,
+    set_pallet_category_active,
     ship_pallet,
     update_pallet_batch,
 )
@@ -51,7 +54,7 @@ except PalletSchemaError as exc:
     st.error(str(exc))
     st.info(
         "既存のパレット環境は、SHARKを停止して"
-        "INSTALL_PALLET_RECEIVING_PLANS.py を一度だけ実行し、"
+        "INSTALL_PALLET_CATEGORY_NUMBERING.py を一度だけ実行し、"
         "再起動してください。"
     )
     conn.close()
@@ -81,6 +84,7 @@ SESSION_DEFAULTS = {
     "receiving_plan_last_pdf_name": "",
     "receiving_plan_last_code": "",
     "receiving_plan_flash": "",
+    "receiving_plan_form_version": 0,
     "receiving_plan_scan_target": None,
     "receiving_plan_confirm_flash": "",
     "receiving_plan_csv_pdf": None,
@@ -173,7 +177,7 @@ def create_auto_allocation(received_qty, pallet_count):
         allocations.append(
             {
                 "パレット番号": (
-                    f"{index:03d} / {pallet_count:03d}"
+                    f"{index:03d}"
                 ),
                 "個数": int(quantity),
             }
@@ -204,10 +208,9 @@ def stock_dataframe(rows):
                     "",
                 ),
                 "パレット番号": (
-                    f"{int(row_value(row, 'pallet_sequence', 0)):03d}"
-                    f" / "
-                    f"{int(row_value(row, 'total_pallets', 0)):03d}"
+                    f"{int(row_value(row, 'category_sequence', 0)):03d}"
                 ),
+                "大カテゴリー": row_value(row, "category_name", ""),
                 "荷主": row_value(row, "company_name", ""),
                 "案件": row_value(row, "project_name", ""),
                 "商品コード": row_value(row, "item_code", ""),
@@ -232,18 +235,28 @@ def history_dataframe(rows):
     data = []
 
     for row in rows:
+        start_number = int(
+            row_value(row, "category_start_sequence", 0)
+        )
+        end_number = int(
+            row_value(row, "category_end_sequence", start_number)
+        )
+        management_number = f"{start_number:03d}"
+
+        if end_number != start_number:
+            management_number = (
+                f"{start_number:03d}～{end_number:03d}"
+            )
+
         data.append(
             {
                 "日時": format_datetime(
                     row_value(row, "created_at", "")
                 ),
                 "区分": row_value(row, "history_type", ""),
-                "登録No／パレット": row_value(
-                    row,
-                    "pallet_code",
-                    "",
-                ),
-                "荷主": row_value(row, "company_name", ""),
+                "管理番号": management_number,
+                "業者名": row_value(row, "company_name", ""),
+                "大カテゴリー": row_value(row, "category_name", ""),
                 "案件": row_value(row, "project_name", ""),
                 "商品コード": row_value(row, "item_code", ""),
                 "商品名": row_value(row, "item_name", ""),
@@ -326,6 +339,11 @@ def receiving_plan_dataframe(rows):
                     row_value(row, "receiving_date", "")
                 ),
                 "顧客": row_value(row, "company_name", ""),
+                "大カテゴリー": row_value(row, "category_name", ""),
+                "開始No": (
+                    f"{int(row_value(row, 'category_start_sequence', 0)):03d}"
+                ),
+                "商品コード": row_value(row, "item_code", ""),
                 "商品名": row_value(row, "item_name", ""),
                 "パレット枚数": int(
                     row_value(row, "pallet_count", 0)
@@ -355,6 +373,8 @@ def validate_receiving_csv(dataframe, companies):
     required_columns = [
         "入庫日",
         "顧客",
+        "大カテゴリー",
+        "商品コード",
         "商品名",
         "パレット枚数",
         "1パレットあたりの商品個数",
@@ -408,7 +428,31 @@ def validate_receiving_csv(dataframe, companies):
             )
             continue
 
+        raw_item_code = row["商品コード"]
         raw_item_name = row["商品名"]
+        raw_category_name = row["大カテゴリー"]
+
+        if pd.isna(raw_category_name):
+            category_name = ""
+        else:
+            category_name = str(raw_category_name).strip()
+
+        if not category_name:
+            errors.append(
+                f"{row_number}行目：大カテゴリーを入力してください。"
+            )
+            continue
+
+        if pd.isna(raw_item_code):
+            item_code = ""
+        else:
+            item_code = str(raw_item_code).strip()
+
+        if not item_code:
+            errors.append(
+                f"{row_number}行目：商品コードを入力してください。"
+            )
+            continue
 
         if pd.isna(raw_item_name):
             item_name = ""
@@ -469,7 +513,9 @@ def validate_receiving_csv(dataframe, companies):
                 "company_id": company["id"],
                 "project_id": None,
                 "item_id": None,
+                "item_code": item_code,
                 "item_name": item_name,
+                "category_name": category_name,
                 "pallet_count": pallet_count,
                 "qty_per_pallet": qty_per_pallet,
             }
@@ -491,6 +537,7 @@ def validate_receiving_csv(dataframe, companies):
     tab_shipping,
     tab_stock,
     tab_history,
+    tab_category,
 ) = st.tabs(
     [
         "事前登録・A4",
@@ -499,6 +546,7 @@ def validate_receiving_csv(dataframe, companies):
         "QR出庫",
         "在庫確認",
         "入出庫履歴",
+        "大カテゴリー管理",
     ]
 )
 
@@ -510,11 +558,11 @@ with tab_receiving_plan:
     st.subheader("入庫予定を事前登録してA4管理票を発行")
     st.info(
         "入庫前に入力してA4横向き管理票を印刷します。"
-        "管理票は1パレットにつき1ページです。"
+        "管理票は必ず1パレットにつき1ページです。"
     )
     st.caption(
-        "案件の選択はありません。商品名はマスター登録なしで"
-        "そのまま入力できます。"
+        "案件の選択はありません。商品コードと商品名は"
+        "マスター登録なしで直接入力できます。"
     )
 
     if st.session_state.receiving_plan_flash:
@@ -546,6 +594,17 @@ with tab_receiving_plan:
         """
     ).fetchall()
     plan_company_map = company_option_map(master_companies)
+    active_categories = list_pallet_categories(
+        conn,
+        include_hidden=False,
+    )
+    plan_category_map = {
+        str(row_value(category, "name", "")): int(
+            row_value(category, "id", 0)
+        )
+        for category in active_categories
+    }
+    new_category_option = "＋ 新しい大カテゴリーを入力"
 
     with plan_form_tab:
         if not plan_company_map:
@@ -560,10 +619,47 @@ with tab_receiving_plan:
                     "顧客",
                     options=list(plan_company_map.keys()),
                 )
-                item_name_value = st.text_input(
-                    "商品名",
-                    placeholder="商品名を入力",
-                )
+                category_col, new_category_col = st.columns(2)
+
+                with category_col:
+                    category_label = st.selectbox(
+                        "大カテゴリー（登録済み）",
+                        options=(
+                            list(plan_category_map.keys())
+                            + [new_category_option]
+                        ),
+                    )
+
+                with new_category_col:
+                    new_category_name = st.text_input(
+                        "新しい大カテゴリー（必要なときだけ）",
+                        value="",
+                        key=(
+                            "receiving_plan_category_"
+                            f"{st.session_state.receiving_plan_form_version}"
+                        ),
+                    )
+                item_col, name_col = st.columns(2)
+
+                with item_col:
+                    item_code_value = st.text_input(
+                        "商品コード",
+                        value="",
+                        key=(
+                            "receiving_plan_item_code_"
+                            f"{st.session_state.receiving_plan_form_version}"
+                        ),
+                    )
+
+                with name_col:
+                    item_name_value = st.text_input(
+                        "商品名",
+                        value="",
+                        key=(
+                            "receiving_plan_item_name_"
+                            f"{st.session_state.receiving_plan_form_version}"
+                        ),
+                    )
                 count_col, quantity_col = st.columns(2)
 
                 with count_col:
@@ -591,9 +687,31 @@ with tab_receiving_plan:
                 )
 
             if preview_submitted:
+                normalized_item_code = str(
+                    item_code_value or ""
+                ).strip()
                 normalized_item_name = str(item_name_value or "").strip()
+                normalized_category_name = str(
+                    new_category_name or ""
+                ).strip()
 
-                if not normalized_item_name:
+                if normalized_category_name:
+                    selected_category_id = None
+                elif category_label == new_category_option:
+                    selected_category_id = None
+                else:
+                    normalized_category_name = category_label
+                    selected_category_id = plan_category_map[
+                        category_label
+                    ]
+
+                if not normalized_category_name:
+                    st.session_state.receiving_plan_preview = None
+                    st.error("大カテゴリーを入力してください。")
+                elif not normalized_item_code:
+                    st.session_state.receiving_plan_preview = None
+                    st.error("商品コードを入力してください。")
+                elif not normalized_item_name:
                     st.session_state.receiving_plan_preview = None
                     st.error("商品名を入力してください。")
                 else:
@@ -602,10 +720,12 @@ with tab_receiving_plan:
                         "receiving_date": receiving_date_value,
                         "company_id": selected_company["id"],
                         "company_name": selected_company["name"],
+                        "category_id": selected_category_id,
+                        "category_name": normalized_category_name,
                         "project_id": None,
                         "item_id": None,
+                        "item_code": normalized_item_code,
                         "item_name": normalized_item_name,
-                        "item_code": "",
                         "pallet_count": int(plan_pallet_count),
                         "qty_per_pallet": int(plan_qty_per_pallet),
                         "total_qty": (
@@ -627,15 +747,23 @@ with tab_receiving_plan:
                         format_date(plan_preview["receiving_date"]),
                     )
                     st.metric("顧客", plan_preview["company_name"])
+                    st.metric(
+                        "大カテゴリー",
+                        plan_preview["category_name"],
+                    )
 
                 with preview_col2:
+                    st.metric(
+                        "商品コード",
+                        plan_preview["item_code"],
+                    )
                     st.metric("商品名", plan_preview["item_name"])
+
+                with preview_col3:
                     st.metric(
                         "パレット枚数",
                         f"{plan_preview['pallet_count']:,} 枚",
                     )
-
-                with preview_col3:
                     st.metric(
                         "1パレットの商品数",
                         f"{plan_preview['qty_per_pallet']:,} 個",
@@ -682,7 +810,12 @@ with tab_receiving_plan:
                                 "qty_per_pallet"
                             ],
                             username=username,
+                            item_code=plan_preview["item_code"],
                             item_name=plan_preview["item_name"],
+                            category_id=plan_preview["category_id"],
+                            category_name=plan_preview[
+                                "category_name"
+                            ],
                         )
                         registered_plan = get_receiving_plan_by_code(
                             conn,
@@ -702,6 +835,7 @@ with tab_receiving_plan:
                             "事前登録が完了しました！"
                             f" A4は{plan_preview['pallet_count']:,}ページです。"
                         )
+                        st.session_state.receiving_plan_form_version += 1
                         st.session_state.receiving_plan_preview = None
                         st.rerun()
 
@@ -721,6 +855,8 @@ with tab_receiving_plan:
                 {
                     "入庫日": date.today().isoformat(),
                     "顧客": "顧客名",
+                    "大カテゴリー": "家具",
+                    "商品コード": "商品コード",
                     "商品名": "商品名",
                     "パレット枚数": 1,
                     "1パレットあたりの商品個数": 1,
@@ -737,7 +873,8 @@ with tab_receiving_plan:
         )
         st.caption(
             "顧客は企業マスターと同じ表記にしてください。"
-            "商品名はCSVに入力した文字をそのまま登録します。"
+            "大カテゴリーは新しい名称でも登録できます。"
+            "商品コード・商品名はCSVの文字をそのまま登録します。"
         )
 
         if st.session_state.receiving_plan_csv_flash:
@@ -794,6 +931,8 @@ with tab_receiving_plan:
                     csv_required_columns = [
                         "入庫日",
                         "顧客",
+                        "大カテゴリー",
+                        "商品コード",
                         "商品名",
                         "パレット枚数",
                         "1パレットあたりの商品個数",
@@ -878,6 +1017,7 @@ with tab_receiving_plan:
                 (
                     f"{row_value(plan, 'receipt_code', '')}｜"
                     f"{row_value(plan, 'company_name', '')}｜"
+                    f"{row_value(plan, 'item_code', '')}｜"
                     f"{row_value(plan, 'item_name', '')}"
                 ): plan
                 for plan in pending_plans
@@ -948,7 +1088,7 @@ with tab_receiving_confirm:
     with st.form("receiving_plan_qr_form", clear_on_submit=True):
         receiving_qr_code = st.text_input(
             "入庫管理票QR",
-            placeholder="IN-260731-001-P001",
+            placeholder="",
         )
         receiving_qr_submitted = st.form_submit_button(
             "QRを確認",
@@ -1000,8 +1140,16 @@ with tab_receiving_confirm:
                     "顧客",
                     row_value(receiving_plan, "company_name", ""),
                 )
+                st.metric(
+                    "大カテゴリー",
+                    row_value(receiving_plan, "category_name", ""),
+                )
 
             with detail_col2:
+                st.metric(
+                    "商品コード",
+                    row_value(receiving_plan, "item_code", ""),
+                )
                 st.metric(
                     "商品名",
                     row_value(receiving_plan, "item_name", ""),
@@ -1559,9 +1707,7 @@ with tab_shipping:
             st.subheader("出庫対象")
 
             pallet_number = (
-                f"{int(row_value(pallet, 'pallet_sequence', 0)):03d}"
-                f" / "
-                f"{int(row_value(pallet, 'total_pallets', 0)):03d}"
+                f"{int(row_value(pallet, 'category_sequence', 0)):03d}"
             )
 
             target_col1, target_col2, target_col3 = st.columns(3)
@@ -1928,6 +2074,9 @@ with tab_history:
                 edit_pallets[0],
                 "item_id",
             )
+            current_item_code = str(
+                row_value(edit_pallets[0], "item_code", "") or ""
+            ).strip()
             current_item_name = str(
                 row_value(edit_pallets[0], "item_name", "") or ""
             ).strip()
@@ -2026,10 +2175,19 @@ with tab_history:
                     index=current_company_index,
                 )
                 if free_name_batch:
-                    edit_item_name_value = st.text_input(
-                        "商品名",
-                        value=current_item_name,
-                    )
+                    edit_code_col, edit_name_col = st.columns(2)
+
+                    with edit_code_col:
+                        edit_item_code_value = st.text_input(
+                            "商品コード",
+                            value=current_item_code,
+                        )
+
+                    with edit_name_col:
+                        edit_item_name_value = st.text_input(
+                            "商品名",
+                            value=current_item_name,
+                        )
                 else:
                     edit_item_label = st.selectbox(
                         "商品",
@@ -2040,17 +2198,10 @@ with tab_history:
                 edit_allocation_rows = []
 
                 for pallet in edit_pallets:
-                    sequence = int(
+                    category_sequence = int(
                         row_value(
                             pallet,
-                            "pallet_sequence",
-                            0,
-                        )
-                    )
-                    total_pallets = int(
-                        row_value(
-                            pallet,
-                            "total_pallets",
+                            "category_sequence",
                             0,
                         )
                     )
@@ -2062,8 +2213,7 @@ with tab_history:
                                 "",
                             ),
                             "パレット番号": (
-                                f"{sequence:03d} / "
-                                f"{total_pallets:03d}"
+                                f"{category_sequence:03d}"
                             ),
                             "個数": int(
                                 row_value(
@@ -2137,6 +2287,9 @@ with tab_history:
                     if free_name_batch:
                         selected_edit_project_id = None
                         selected_edit_item_id = None
+                        selected_edit_item_code = str(
+                            edit_item_code_value or ""
+                        ).strip()
                         selected_edit_item_name = str(
                             edit_item_name_value or ""
                         ).strip()
@@ -2151,6 +2304,11 @@ with tab_history:
                         selected_edit_item_id = row_value(
                             selected_edit_item,
                             "id",
+                        )
+                        selected_edit_item_code = row_value(
+                            selected_edit_item,
+                            "code",
+                            "",
                         )
                         selected_edit_item_name = row_value(
                             selected_edit_item,
@@ -2170,6 +2328,7 @@ with tab_history:
                         allocations=edited_allocations.to_dict(
                             "records"
                         ),
+                        item_code=selected_edit_item_code,
                         item_name=selected_edit_item_name,
                     )
 
@@ -2256,6 +2415,115 @@ with tab_history:
                                 "誤登録の削除中にエラーが"
                                 f"発生しました：{exc}"
                             )
+
+
+# ============================================================
+# 大カテゴリー管理
+# ============================================================
+with tab_category:
+    st.subheader("大カテゴリー管理")
+    st.info(
+        "大カテゴリーごとにパレットNoを001から採番します。"
+        "A4と画面には番号だけを表示し、QRコードは従来の固有コードです。"
+    )
+    st.caption(
+        "一度発行した番号は、入庫予定を取り消しても再利用しません。"
+        "使用済みカテゴリーは削除せず、非表示で管理します。"
+    )
+
+    with st.form("pallet_category_add_form", clear_on_submit=True):
+        category_name_to_add = st.text_input(
+            "新しい大カテゴリー",
+            placeholder="例：家具",
+        )
+        category_add_submitted = st.form_submit_button(
+            "大カテゴリーを追加",
+            type="primary",
+            use_container_width=True,
+        )
+
+    if category_add_submitted:
+        try:
+            create_pallet_category(
+                conn=conn,
+                name=category_name_to_add,
+                username=username,
+            )
+            st.success(
+                f"大カテゴリー「{str(category_name_to_add).strip()}」を"
+                "追加しました。"
+            )
+            st.rerun()
+        except PalletError as exc:
+            st.error(str(exc))
+
+    all_categories = list_pallet_categories(
+        conn,
+        include_hidden=True,
+    )
+
+    if all_categories:
+        category_table = pd.DataFrame(
+            [
+                {
+                    "大カテゴリー": row_value(row, "name", ""),
+                    "次に発行するNo": (
+                        f"{int(row_value(row, 'next_sequence', 1)):03d}"
+                    ),
+                    "状態": (
+                        "表示中"
+                        if bool(row_value(row, "is_active", True))
+                        else "非表示"
+                    ),
+                }
+                for row in all_categories
+            ]
+        )
+        st.dataframe(
+            category_table,
+            hide_index=True,
+            use_container_width=True,
+        )
+
+        category_manage_map = {
+            str(row_value(row, "name", "")): row
+            for row in all_categories
+        }
+        with st.form("pallet_category_visibility_form"):
+            category_to_manage_name = st.selectbox(
+                "表示を変更する大カテゴリー",
+                options=list(category_manage_map.keys()),
+            )
+            category_to_manage = category_manage_map[
+                category_to_manage_name
+            ]
+            current_active = bool(
+                row_value(category_to_manage, "is_active", True)
+            )
+            category_visibility = st.radio(
+                "状態",
+                options=["表示中", "非表示"],
+                index=0 if current_active else 1,
+                horizontal=True,
+            )
+            category_visibility_submitted = st.form_submit_button(
+                "状態を保存",
+                use_container_width=True,
+            )
+
+        if category_visibility_submitted:
+            try:
+                set_pallet_category_active(
+                    conn=conn,
+                    category_id=int(
+                        row_value(category_to_manage, "id", 0)
+                    ),
+                    is_active=(category_visibility == "表示中"),
+                )
+                st.success("大カテゴリーの表示状態を更新しました。")
+                st.rerun()
+            except PalletError as exc:
+                st.error(str(exc))
 
 
 # ============================================================

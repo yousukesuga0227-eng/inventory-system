@@ -182,7 +182,7 @@ def create_pallet_a4_pdf(pallets):
     1パレットにつきA4横向きを1ページ作る。
 
     A4へ載せる内容：
-    パレット番号、荷主、商品名、数量、入庫日、QRコード。
+    パレット番号、荷主、大カテゴリー、商品名、数量、入庫日、QRコード。
     """
 
     pallets = list(pallets)
@@ -197,11 +197,17 @@ def create_pallet_a4_pdf(pallets):
     page_width, page_height = page_size
 
     for pallet in pallets:
-        sequence = int(_value(pallet, "pallet_sequence", 1))
-        total_pallets = int(_value(pallet, "total_pallets", 1))
-        pallet_number = f"{sequence:03d} / {total_pallets:03d}"
+        category_sequence = int(
+            _value(
+                pallet,
+                "category_sequence",
+                _value(pallet, "pallet_sequence", 1),
+            )
+        )
+        pallet_number = f"{category_sequence:03d}"
         pallet_code = str(_value(pallet, "pallet_code", ""))
         company_name = str(_value(pallet, "company_name", ""))
+        category_name = str(_value(pallet, "category_name", ""))
         item_name = str(_value(pallet, "item_name", ""))
         quantity = int(
             _value(
@@ -259,7 +265,13 @@ def create_pallet_a4_pdf(pallets):
         rows = [
             ("入庫日", received_date, 26, header_line_y - (16 * mm)),
             ("荷主", company_name, 27, header_line_y - (36 * mm)),
-            ("商品名", item_name, 25, header_line_y - (64 * mm)),
+            (
+                "大カテゴリー",
+                category_name,
+                21,
+                header_line_y - (56 * mm),
+            ),
+            ("商品名", item_name, 25, header_line_y - (74 * mm)),
         ]
 
         for label, value, font_size, baseline_y in rows:
@@ -291,10 +303,11 @@ def create_pallet_a4_pdf(pallets):
             quantity_box_top - (11 * mm),
             "数量",
         )
+        # 倉庫で離れて見ても数量を確認できる大きさを維持する。
         pdf.setFont(FONT_NAME, 50)
         pdf.drawCentredString(
             inner_x + (left_width / 2),
-            quantity_box_bottom + (10 * mm),
+            quantity_box_bottom + (8 * mm),
             f"{quantity:,} 個",
         )
 
@@ -352,8 +365,12 @@ def create_receiving_plan_a4_pdf(plans):
             _value(plan, "receiving_date", "")
         )
         company_name = str(_value(plan, "company_name", ""))
+        category_name = str(_value(plan, "category_name", ""))
         item_name = str(_value(plan, "item_name", ""))
         pallet_count = int(_value(plan, "pallet_count", 1))
+        category_start_sequence = int(
+            _value(plan, "category_start_sequence", 1)
+        )
         qty_per_pallet = int(_value(plan, "qty_per_pallet", 0))
         total_qty = int(
             _value(
@@ -365,6 +382,9 @@ def create_receiving_plan_a4_pdf(plans):
 
         for sequence in range(1, pallet_count + 1):
             pallet_code = f"{receipt_code}-P{sequence:03d}"
+            pallet_number = (
+                category_start_sequence + sequence - 1
+            )
             margin = 10 * mm
             inner_x = margin + (7 * mm)
             inner_top = page_height - margin - (7 * mm)
@@ -405,7 +425,13 @@ def create_receiving_plan_a4_pdf(plans):
             rows = [
                 ("入庫日", receiving_date, 28, header_line_y - (16 * mm)),
                 ("顧客", company_name, 28, header_line_y - (36 * mm)),
-                ("商品名", item_name, 25, header_line_y - (61 * mm)),
+                (
+                    "大カテゴリー",
+                    category_name,
+                    21,
+                    header_line_y - (55 * mm),
+                ),
+                ("商品名", item_name, 25, header_line_y - (73 * mm)),
             ]
 
             for label, value, font_size, baseline_y in rows:
@@ -446,10 +472,10 @@ def create_receiving_plan_a4_pdf(plans):
                     box_top - (10 * mm),
                     label,
                 )
-                pdf.setFont(FONT_NAME, 27)
+                pdf.setFont(FONT_NAME, 34)
                 pdf.drawCentredString(
                     box_x + (box_width / 2),
-                    box_bottom + (12 * mm),
+                    box_bottom + (10 * mm),
                     value,
                 )
 
@@ -457,7 +483,7 @@ def create_receiving_plan_a4_pdf(plans):
             pdf.drawCentredString(
                 qr_x + (qr_size / 2),
                 header_line_y - (20 * mm),
-                f"{sequence:03d} / {pallet_count:03d}",
+                f"{pallet_number:03d}",
             )
             _draw_qr(
                 pdf=pdf,

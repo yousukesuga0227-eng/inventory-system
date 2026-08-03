@@ -29,7 +29,11 @@ _POSTGRES_EXPECTED_TYPES = {
     ("pallet_inventory", "company_id"): "integer",
     ("pallet_inventory", "project_id"): "integer",
     ("pallet_inventory", "item_id"): "integer",
+    ("pallet_inventory", "item_code"): "text",
     ("pallet_inventory", "item_name"): "text",
+    ("pallet_inventory", "category_id"): "bigint",
+    ("pallet_inventory", "category_name"): "text",
+    ("pallet_inventory", "category_sequence"): "integer",
     ("pallet_inventory", "initial_qty"): "integer",
     ("pallet_inventory", "current_qty"): "integer",
     ("pallet_inventory", "status"): "text",
@@ -55,7 +59,11 @@ _POSTGRES_EXPECTED_TYPES = {
     ("pallet_receiving_plans", "company_id"): "integer",
     ("pallet_receiving_plans", "project_id"): "integer",
     ("pallet_receiving_plans", "item_id"): "integer",
+    ("pallet_receiving_plans", "item_code"): "text",
     ("pallet_receiving_plans", "item_name"): "text",
+    ("pallet_receiving_plans", "category_id"): "bigint",
+    ("pallet_receiving_plans", "category_name"): "text",
+    ("pallet_receiving_plans", "category_start_sequence"): "integer",
     ("pallet_receiving_plans", "pallet_count"): "integer",
     ("pallet_receiving_plans", "qty_per_pallet"): "integer",
     ("pallet_receiving_plans", "total_qty"): "integer",
@@ -71,6 +79,13 @@ _POSTGRES_EXPECTED_TYPES = {
     ("pallet_receiving_plans", "confirmed_at"):
         "timestamp with time zone",
     ("pallet_receiving_plans", "is_deleted"): "boolean",
+    ("pallet_categories", "id"): "bigint",
+    ("pallet_categories", "name"): "text",
+    ("pallet_categories", "next_sequence"): "integer",
+    ("pallet_categories", "is_active"): "boolean",
+    ("pallet_categories", "created_by"): "text",
+    ("pallet_categories", "created_at"): "timestamp with time zone",
+    ("pallet_categories", "updated_at"): "timestamp with time zone",
 }
 
 _SQLITE_EXPECTED_TYPES = {
@@ -82,7 +97,11 @@ _SQLITE_EXPECTED_TYPES = {
     ("pallet_inventory", "company_id"): "INTEGER",
     ("pallet_inventory", "project_id"): "INTEGER",
     ("pallet_inventory", "item_id"): "INTEGER",
+    ("pallet_inventory", "item_code"): "TEXT",
     ("pallet_inventory", "item_name"): "TEXT",
+    ("pallet_inventory", "category_id"): "INTEGER",
+    ("pallet_inventory", "category_name"): "TEXT",
+    ("pallet_inventory", "category_sequence"): "INTEGER",
     ("pallet_inventory", "initial_qty"): "INTEGER",
     ("pallet_inventory", "current_qty"): "INTEGER",
     ("pallet_inventory", "status"): "TEXT",
@@ -108,7 +127,11 @@ _SQLITE_EXPECTED_TYPES = {
     ("pallet_receiving_plans", "company_id"): "INTEGER",
     ("pallet_receiving_plans", "project_id"): "INTEGER",
     ("pallet_receiving_plans", "item_id"): "INTEGER",
+    ("pallet_receiving_plans", "item_code"): "TEXT",
     ("pallet_receiving_plans", "item_name"): "TEXT",
+    ("pallet_receiving_plans", "category_id"): "INTEGER",
+    ("pallet_receiving_plans", "category_name"): "TEXT",
+    ("pallet_receiving_plans", "category_start_sequence"): "INTEGER",
     ("pallet_receiving_plans", "pallet_count"): "INTEGER",
     ("pallet_receiving_plans", "qty_per_pallet"): "INTEGER",
     ("pallet_receiving_plans", "total_qty"): "INTEGER",
@@ -121,12 +144,20 @@ _SQLITE_EXPECTED_TYPES = {
     ("pallet_receiving_plans", "confirmed_by"): "TEXT",
     ("pallet_receiving_plans", "confirmed_at"): "TEXT",
     ("pallet_receiving_plans", "is_deleted"): "INTEGER",
+    ("pallet_categories", "id"): "INTEGER",
+    ("pallet_categories", "name"): "TEXT",
+    ("pallet_categories", "next_sequence"): "INTEGER",
+    ("pallet_categories", "is_active"): "INTEGER",
+    ("pallet_categories", "created_by"): "TEXT",
+    ("pallet_categories", "created_at"): "TEXT",
+    ("pallet_categories", "updated_at"): "TEXT",
 }
 
 _TABLE_NAMES = (
     "pallet_inventory",
     "pallet_history",
     "pallet_receiving_plans",
+    "pallet_categories",
 )
 
 
@@ -209,9 +240,8 @@ def _schema_error(issues):
     details = "\n".join(f"- {issue}" for issue in issues)
     return PalletSchemaError(
         "パレット用DBの定義が正しくありません。\n"
-        "既存環境は INSTALL_PALLET_RECEIVING_PLANS.py を、\n"
-        "新規環境または空テーブルの再作成は "
-        "REBUILD_PALLET_TABLES.py を実行してください。\n"
+        "既存環境は INSTALL_PALLET_CATEGORY_NUMBERING.py を、\n"
+        "一度だけ実行してからSHARKを再起動してください。\n"
         f"{details}"
     )
 
@@ -231,7 +261,8 @@ def _validate_postgres(conn):
             AND table_name IN (
                 'pallet_inventory',
                 'pallet_history',
-                'pallet_receiving_plans'
+                'pallet_receiving_plans',
+                'pallet_categories'
             )
         ORDER BY table_name, ordinal_position
         """
