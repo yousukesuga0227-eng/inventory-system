@@ -207,6 +207,116 @@ def stock_dataframe(rows):
     )
 
 
+
+# === SHARK PRODUCT CODE STOCK SUMMARY HELPER START ===
+def stock_row_matches(row, search_text):
+    # 現在庫の1パレットが検索語に一致するか判定する。
+    normalized_search = str(search_text or "").strip().casefold()
+
+    if not normalized_search:
+        return True
+
+    management_sequence = int(
+        row_value(row, "category_sequence", 0)
+    )
+    searchable_values = [
+        row_value(row, "company_code", ""),
+        row_value(row, "company_name", ""),
+        row_value(row, "category_name", ""),
+        row_value(row, "item_code", ""),
+        row_value(row, "item_name", ""),
+        row_value(row, "pallet_code", ""),
+        row_value(row, "batch_code", ""),
+        str(management_sequence),
+        f"{management_sequence:03d}",
+    ]
+    searchable_text = " ".join(
+        str(value or "")
+        for value in searchable_values
+    ).casefold()
+    return normalized_search in searchable_text
+
+
+def product_code_stock_dataframe(rows):
+    # 保管中パレットを商品コード単位でまとめる。
+    # 未採番の旧データだけは顧客・カテゴリー・商品名で分ける。
+    grouped = {}
+
+    for row in rows:
+        company_code = str(
+            row_value(row, "company_code", "") or ""
+        ).strip()
+        company_name = str(
+            row_value(row, "company_name", "") or ""
+        ).strip()
+        category_name = str(
+            row_value(row, "category_name", "") or ""
+        ).strip()
+        item_code = str(
+            row_value(row, "item_code", "") or ""
+        ).strip().upper()
+        item_name = str(
+            row_value(row, "item_name", "") or ""
+        ).strip()
+        current_qty = int(
+            row_value(row, "current_qty", 0)
+        )
+
+        if item_code:
+            group_key = (
+                "CODE",
+                company_code.casefold(),
+                category_name.casefold(),
+                item_code.casefold(),
+            )
+        else:
+            group_key = (
+                "NO_CODE",
+                company_code.casefold(),
+                company_name.casefold(),
+                category_name.casefold(),
+                item_name.casefold(),
+            )
+
+        if group_key not in grouped:
+            grouped[group_key] = {
+                "顧客コード": company_code,
+                "顧客名": company_name,
+                "大カテゴリー": category_name,
+                "商品コード": item_code or "未採番",
+                "商品名": item_name,
+                "保管パレット数": 0,
+                "現在庫合計": 0,
+            }
+
+        grouped[group_key]["保管パレット数"] += 1
+        grouped[group_key]["現在庫合計"] += current_qty
+
+    summary_rows = sorted(
+        grouped.values(),
+        key=lambda row: (
+            str(row["顧客コード"]),
+            str(row["顧客名"]),
+            str(row["大カテゴリー"]),
+            str(row["商品コード"]),
+            str(row["商品名"]),
+        ),
+    )
+
+    return pd.DataFrame(
+        summary_rows,
+        columns=[
+            "顧客コード",
+            "顧客名",
+            "大カテゴリー",
+            "商品コード",
+            "商品名",
+            "保管パレット数",
+            "現在庫合計",
+        ],
+    )
+# === SHARK PRODUCT CODE STOCK SUMMARY HELPER END ===
+
 def history_dataframe(rows):
     return pd.DataFrame(
         [
@@ -714,40 +824,90 @@ with tab_qr:
 # ============================================================
 # 3. 現在庫
 # ============================================================
+# === SHARK PRODUCT CODE STOCK SUMMARY UI START ===
 with tab_stock:
     st.subheader("現在庫")
 
     stock_search = st.text_input(
         "検索",
-        placeholder="業者名・大カテゴリー・商品名・管理番号",
+        placeholder=(
+            "顧客名・大カテゴリー・商品コード・商品名・管理番号"
+        ),
         key="simple_stock_search",
     )
-    stock_rows = list_pallet_stock(
+
+    # 商品コード検索を確実に効かせるため、保管中データを取得して
+    # 画面側で商品コードを含む全項目を検索する。
+    all_stock_rows = list_pallet_stock(
         conn=conn,
         status="保管中",
-        search_text=stock_search,
+        search_text="",
     )
+    stock_rows = [
+        row
+        for row in all_stock_rows
+        if stock_row_matches(row, stock_search)
+    ]
+    product_stock_df = product_code_stock_dataframe(stock_rows)
     total_current_qty = sum(
         int(row_value(row, "current_qty", 0))
         for row in stock_rows
     )
+    uncoded_pallet_count = sum(
+        not str(row_value(row, "item_code", "") or "").strip()
+        for row in stock_rows
+    )
 
-    metric_col1, metric_col2 = st.columns(2)
+    metric_col1, metric_col2, metric_col3 = st.columns(3)
 
     with metric_col1:
-        st.metric("保管中パレット", f"{len(stock_rows):,}枚")
+        st.metric(
+            "商品種類",
+            f"{len(product_stock_df):,}種類",
+        )
 
     with metric_col2:
-        st.metric("現在庫合計", f"{total_current_qty:,}個")
+        st.metric(
+            "保管中パレット",
+            f"{len(stock_rows):,}枚",
+        )
+
+    with metric_col3:
+        st.metric(
+            "現在庫合計",
+            f"{total_current_qty:,}個",
+        )
 
     if not stock_rows:
-        st.info("現在庫はありません。")
+        st.info("該当する現在庫はありません。")
     else:
+        st.subheader("商品コード別の現在庫")
+        st.caption(
+            "同じ商品コードの保管中パレットをまとめて、"
+            "現在庫の合計数を表示しています。"
+        )
         st.dataframe(
-            stock_dataframe(stock_rows),
+            product_stock_df,
             hide_index=True,
             use_container_width=True,
         )
+
+        if uncoded_pallet_count:
+            st.warning(
+                "商品コード未採番の保管中パレットが "
+                f"{uncoded_pallet_count:,}枚あります。"
+                "管理メニューの既存商品採番を確認してください。"
+            )
+
+        with st.expander(
+            "パレット別の内訳を見る",
+            expanded=False,
+        ):
+            st.dataframe(
+                stock_dataframe(stock_rows),
+                hide_index=True,
+                use_container_width=True,
+            )
 
 
 # ============================================================
