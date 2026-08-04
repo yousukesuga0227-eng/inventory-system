@@ -495,45 +495,723 @@ def _reserve_category_sequences(conn, category_id, count):
     return start_sequence
 
 
+def _numbering_range_end(start_sequence, pallet_count):
+    """開始番号と枚数から終了番号を返し、採番範囲を検証する。"""
+
+    start_sequence = int(start_sequence)
+    pallet_count = int(pallet_count)
+
+    if start_sequence < 1:
+        raise PalletStockError("管理番号は1以上で入力してください。")
+
+    if pallet_count < 1:
+        raise PalletStockError("パレット枚数が不正です。")
+
+    end_sequence = start_sequence + pallet_count - 1
+
+    if end_sequence >= 1_000_000:
+        raise PalletStockError(
+            "管理番号は999999以内に収まるように入力してください。"
+        )
+
+    return end_sequence
+
+
+def get_pallet_category_numbering_limit(conn, category_id):
+    """カテゴリーで安全に設定できる次回開始番号の下限を返す。"""
+
+    category = _get_category_by_id(conn, category_id)
+
+    if category is None:
+        raise PalletNotFoundError("大カテゴリーが見つかりません。")
+
+    inventory_cursor = _execute(
+        conn,
+        """
+        SELECT COALESCE(MAX(category_sequence), 0) AS maximum_sequence
+        FROM pallet_inventory
+        WHERE category_id = ?
+        """,
+        (int(category_id),),
+    )
+    inventory_row = _fetchone_dict(inventory_cursor) or {}
+    inventory_next = int(inventory_row.get("maximum_sequence") or 0) + 1
+
+    plan_cursor = _execute(
+        conn,
+        f"""
+        SELECT COALESCE(
+            MAX(category_start_sequence + pallet_count),
+            1
+        ) AS next_after_plan
+        FROM pallet_receiving_plans
+        WHERE
+            category_id = ?
+            AND status <> '取消'
+            AND {_not_deleted_condition("is_deleted")}
+        """,
+        (int(category_id),),
+    )
+    plan_row = _fetchone_dict(plan_cursor) or {}
+    plan_next = int(plan_row.get("next_after_plan") or 1)
+    minimum_next = max(1, inventory_next, plan_next)
+
+    return {
+        "category_id": int(category["id"]),
+        "category_name": str(category["name"]),
+        "current_next_sequence": int(category.get("next_sequence") or 1),
+        "minimum_next_sequence": minimum_next,
+    }
+
+
+def set_pallet_category_next_sequence(
+    conn,
+    category_id,
+    next_sequence,
+):
+    """
+    次回の採番開始番号を変更する。
+
+    既存在庫または有効な入庫予定が使用・予約している範囲より前には
+    戻せない。番号を飛ばすための前進と、安全下限までの巻き戻しに対応。
+    """
+
+    requested_next = int(next_sequence)
+    _numbering_range_end(requested_next, 1)
+    category = _get_category_by_id(conn, category_id, lock=True)
+
+    if category is None:
+        raise PalletNotFoundError("大カテゴリーが見つかりません。")
+
+    limit = get_pallet_category_numbering_limit(conn, category_id)
+    minimum_next = int(limit["minimum_next_sequence"])
+
+    if requested_next < minimum_next:
+        raise PalletStockError(
+            f"この大カテゴリーは {minimum_next:03d} 以降を"
+            "指定してください。既存または予約中の番号と重複します。"
+        )
+
+    current_next = int(category.get("next_sequence") or 1)
+
+    try:
+        cursor = _execute(
+            conn,
+            """
+            UPDATE pallet_categories
+            SET next_sequence = ?, updated_at = ?
+            WHERE id = ? AND next_sequence = ?
+            """,
+            (
+                requested_next,
+                _now(),
+                int(category_id),
+                current_next,
+            ),
+        )
+        rowcount = _cursor_attribute(cursor, "rowcount")
+
+        if rowcount is not None and rowcount != 1:
+            raise PalletConflictError(
+                "別の端末で採番設定が更新されました。"
+                "画面を更新してもう一度実行してください。"
+            )
+
+        conn.commit()
+        return {
+            "category_id": int(category_id),
+            "category_name": str(category["name"]),
+            "old_next_sequence": current_next,
+            "next_sequence": requested_next,
+        }
+
+    except Exception:
+        _rollback_safely(conn)
+        raise
+
+
+def list_pallet_numbering_registrations(conn, limit=1000):
+    """採番管理で編集できる入庫待ち・入庫済み登録を取得する。"""
+
+    plan_cursor = _execute(
+        conn,
+        f"""
+        SELECT
+            rp.id AS registration_id,
+            'plan' AS source_type,
+            rp.receipt_code,
+            rp.batch_code,
+            rp.status AS registration_status,
+            rp.category_id,
+            rp.category_name,
+            rp.category_start_sequence,
+            (
+                rp.category_start_sequence + rp.pallet_count - 1
+            ) AS category_end_sequence,
+            rp.pallet_count,
+            rp.company_id,
+            c.name AS company_name,
+            COALESCE(NULLIF(rp.item_code, ''), i.code, '') AS item_code,
+            COALESCE(NULLIF(rp.item_name, ''), i.name, '') AS item_name,
+            rp.updated_at
+        FROM pallet_receiving_plans rp
+        LEFT JOIN companies c
+            ON c.id = rp.company_id
+        LEFT JOIN items i
+            ON i.id = rp.item_id
+        WHERE
+            rp.status <> '取消'
+            AND {_not_deleted_condition("rp.is_deleted")}
+        ORDER BY rp.updated_at DESC, rp.id DESC
+        LIMIT ?
+        """,
+        (int(limit),),
+    )
+    registrations = _fetchall_dict(plan_cursor)
+
+    batch_cursor = _execute(
+        conn,
+        f"""
+        SELECT
+            MIN(pi.id) AS registration_id,
+            'batch' AS source_type,
+            '' AS receipt_code,
+            pi.batch_code,
+            '入庫済み' AS registration_status,
+            MIN(pi.category_id) AS category_id,
+            MAX(pi.category_name) AS category_name,
+            MIN(pi.category_sequence) AS category_start_sequence,
+            MAX(pi.category_sequence) AS category_end_sequence,
+            COUNT(*) AS pallet_count,
+            MIN(pi.company_id) AS company_id,
+            MAX(c.name) AS company_name,
+            MAX(COALESCE(NULLIF(pi.item_code, ''), i.code, ''))
+                AS item_code,
+            MAX(COALESCE(NULLIF(pi.item_name, ''), i.name, ''))
+                AS item_name,
+            MAX(pi.updated_at) AS updated_at
+        FROM pallet_inventory pi
+        LEFT JOIN companies c
+            ON c.id = pi.company_id
+        LEFT JOIN items i
+            ON i.id = pi.item_id
+        WHERE
+            {_not_deleted_condition("pi.is_deleted")}
+            AND NOT EXISTS (
+                SELECT 1
+                FROM pallet_receiving_plans rp
+                WHERE
+                    rp.batch_code = pi.batch_code
+                    AND rp.status <> '取消'
+                    AND {_not_deleted_condition("rp.is_deleted")}
+            )
+        GROUP BY pi.batch_code
+        ORDER BY MAX(pi.updated_at) DESC, MIN(pi.id) DESC
+        LIMIT ?
+        """,
+        (int(limit),),
+    )
+    registrations.extend(_fetchall_dict(batch_cursor))
+    registrations.sort(
+        key=lambda row: str(row.get("updated_at") or ""),
+        reverse=True,
+    )
+    return registrations[: int(limit)]
+
+
+def _numbering_conflicts(
+    conn,
+    category_id,
+    start_sequence,
+    end_sequence,
+    excluded_batch_code="",
+    excluded_plan_id=None,
+):
+    """指定範囲と重なる在庫または入庫待ち予約を返す。"""
+
+    inventory_conditions = [
+        "category_id = ?",
+        "category_sequence BETWEEN ? AND ?",
+    ]
+    inventory_params = [
+        int(category_id),
+        int(start_sequence),
+        int(end_sequence),
+    ]
+
+    normalized_batch_code = str(excluded_batch_code or "").strip()
+
+    if normalized_batch_code:
+        inventory_conditions.append(
+            "(batch_code IS NULL OR batch_code <> ?)"
+        )
+        inventory_params.append(normalized_batch_code)
+
+    inventory_cursor = _execute(
+        conn,
+        f"""
+        SELECT pallet_code, batch_code, category_sequence
+        FROM pallet_inventory
+        WHERE {' AND '.join(inventory_conditions)}
+        ORDER BY category_sequence
+        LIMIT 1
+        """,
+        tuple(inventory_params),
+    )
+    inventory_conflict = _fetchone_dict(inventory_cursor)
+
+    plan_conditions = [
+        "category_id = ?",
+        "status = '入庫待ち'",
+        _not_deleted_condition("is_deleted"),
+        "category_start_sequence <= ?",
+        "category_start_sequence + pallet_count - 1 >= ?",
+    ]
+    plan_params = [
+        int(category_id),
+        int(end_sequence),
+        int(start_sequence),
+    ]
+
+    if excluded_plan_id not in (None, ""):
+        plan_conditions.append("id <> ?")
+        plan_params.append(int(excluded_plan_id))
+
+    plan_cursor = _execute(
+        conn,
+        f"""
+        SELECT
+            id,
+            receipt_code,
+            category_start_sequence,
+            pallet_count
+        FROM pallet_receiving_plans
+        WHERE {' AND '.join(plan_conditions)}
+        ORDER BY category_start_sequence
+        LIMIT 1
+        """,
+        tuple(plan_params),
+    )
+    plan_conflict = _fetchone_dict(plan_cursor)
+    return inventory_conflict, plan_conflict
+
+
+def renumber_pallet_registration(
+    conn,
+    source_type,
+    registration_id,
+    batch_code,
+    new_start_sequence,
+):
+    """
+    入庫待ちまたは入庫済み登録を、連続した別番号へ安全に移動する。
+
+    QRに使う pallet_code は変更せず、カテゴリー内の表示番号だけを変更。
+    入庫済みは登録No単位で全パレットを移動し、管理票の開始番号も同期する。
+    """
+
+    normalized_source_type = str(source_type or "").strip().lower()
+
+    if normalized_source_type not in {"plan", "batch"}:
+        raise PalletStockError("採番変更の対象種別が不正です。")
+
+    normalized_batch_code = str(batch_code or "").strip().upper()
+    plan = None
+    plan_id = None
+    receipt_code = ""
+    inventory_rows = []
+    category_id = None
+    category_name = ""
+    pallet_count = 0
+    old_start_sequence = 0
+
+    try:
+        if normalized_source_type == "plan":
+            suffix = " FOR UPDATE" if _is_postgres(conn) else ""
+            cursor = _execute(
+                conn,
+                f"""
+                SELECT
+                    id,
+                    receipt_code,
+                    batch_code,
+                    status,
+                    category_id,
+                    category_name,
+                    category_start_sequence,
+                    pallet_count
+                FROM pallet_receiving_plans
+                WHERE
+                    id = ?
+                    AND {_not_deleted_condition("is_deleted")}
+                LIMIT 1{suffix}
+                """,
+                (int(registration_id),),
+            )
+            plan = _fetchone_dict(cursor)
+
+            if plan is None:
+                raise PalletNotFoundError(
+                    "採番変更する入庫登録が見つかりません。"
+                )
+
+            if str(plan.get("status") or "") == "取消":
+                raise PalletStockError("取り消した登録は採番変更できません。")
+
+            plan_id = int(plan["id"])
+            receipt_code = str(plan.get("receipt_code") or "")
+            normalized_batch_code = str(
+                plan.get("batch_code") or normalized_batch_code
+            ).strip().upper()
+            category_id = int(plan["category_id"])
+            category_name = str(plan.get("category_name") or "")
+            pallet_count = int(plan["pallet_count"])
+            old_start_sequence = int(plan["category_start_sequence"])
+
+        if normalized_source_type == "batch" or normalized_batch_code:
+            if not normalized_batch_code:
+                raise PalletNotFoundError("登録Noが指定されていません。")
+
+            suffix = " FOR UPDATE" if _is_postgres(conn) else ""
+            cursor = _execute(
+                conn,
+                f"""
+                SELECT
+                    id,
+                    pallet_code,
+                    batch_code,
+                    pallet_sequence,
+                    category_id,
+                    category_name,
+                    category_sequence
+                FROM pallet_inventory
+                WHERE
+                    batch_code = ?
+                    AND {_not_deleted_condition("is_deleted")}
+                ORDER BY pallet_sequence, id{suffix}
+                """,
+                (normalized_batch_code,),
+            )
+            inventory_rows = _fetchall_dict(cursor)
+
+            if normalized_source_type == "batch" and not inventory_rows:
+                raise PalletNotFoundError(
+                    "採番変更する入庫済み登録が見つかりません。"
+                )
+
+            if plan is not None and str(plan.get("status") or "") == "入庫済み":
+                if not inventory_rows:
+                    raise PalletConflictError(
+                        "入庫済み管理票と在庫の状態が一致しません。"
+                        "採番変更を中止しました。"
+                    )
+
+            if inventory_rows:
+                batch_category_ids = {
+                    int(row["category_id"])
+                    for row in inventory_rows
+                }
+
+                if len(batch_category_ids) != 1:
+                    raise PalletConflictError(
+                        "登録No内で大カテゴリーが一致していません。"
+                        "採番変更を中止しました。"
+                    )
+
+                inventory_category_id = next(iter(batch_category_ids))
+
+                if (
+                    category_id is not None
+                    and category_id != inventory_category_id
+                ):
+                    raise PalletConflictError(
+                        "入庫管理票と在庫の大カテゴリーが一致しません。"
+                    )
+
+                category_id = inventory_category_id
+                category_name = str(
+                    inventory_rows[0].get("category_name") or ""
+                )
+
+                # 管理票がある場合は、未入庫分も含む予約範囲全体を
+                # 移動する。旧式の在庫だけなら実在パレット数を使う。
+                if plan is None:
+                    pallet_count = len(inventory_rows)
+                    old_start_sequence = min(
+                        int(row["category_sequence"])
+                        - int(row["pallet_sequence"])
+                        + 1
+                        for row in inventory_rows
+                    )
+
+        if category_id is None or pallet_count < 1:
+            raise PalletConflictError(
+                "採番変更に必要な登録情報が不足しています。"
+            )
+
+        new_start_sequence = int(new_start_sequence)
+        new_end_sequence = _numbering_range_end(
+            new_start_sequence,
+            pallet_count,
+        )
+        old_end_sequence = _numbering_range_end(
+            old_start_sequence,
+            pallet_count,
+        )
+
+        inventory_conflict, plan_conflict = _numbering_conflicts(
+            conn=conn,
+            category_id=category_id,
+            start_sequence=new_start_sequence,
+            end_sequence=new_end_sequence,
+            excluded_batch_code=normalized_batch_code,
+            excluded_plan_id=plan_id,
+        )
+
+        if inventory_conflict is not None:
+            conflict_number = int(inventory_conflict["category_sequence"])
+            raise PalletStockError(
+                f"管理番号 {conflict_number:03d} はすでに使われています。"
+            )
+
+        if plan_conflict is not None:
+            conflict_code = str(plan_conflict.get("receipt_code") or "")
+            raise PalletStockError(
+                f"入庫待ち「{conflict_code}」が同じ番号を予約しています。"
+            )
+
+        if inventory_rows:
+            # 範囲が一部重なる移動でもUNIQUE制約に当たらないよう、
+            # 同じトランザクション内で一度だけ負の仮番号へ退避する。
+            for row in inventory_rows:
+                temporary_sequence = -(1_000_000_000 + int(row["id"]))
+                cursor = _execute(
+                    conn,
+                    """
+                    UPDATE pallet_inventory
+                    SET category_sequence = ?, updated_at = ?
+                    WHERE
+                        id = ?
+                        AND category_id = ?
+                        AND category_sequence = ?
+                    """,
+                    (
+                        temporary_sequence,
+                        _now(),
+                        int(row["id"]),
+                        category_id,
+                        int(row["category_sequence"]),
+                    ),
+                )
+                rowcount = _cursor_attribute(cursor, "rowcount")
+
+                if rowcount is not None and rowcount != 1:
+                    raise PalletConflictError(
+                        "別の端末で管理番号が更新されました。"
+                        "画面を更新してください。"
+                    )
+
+            for row in inventory_rows:
+                cursor = _execute(
+                    conn,
+                    """
+                    UPDATE pallet_inventory
+                    SET category_sequence = ?, updated_at = ?
+                    WHERE id = ? AND category_sequence = ?
+                    """,
+                    (
+                        new_start_sequence
+                        + int(row["pallet_sequence"])
+                        - 1,
+                        _now(),
+                        int(row["id"]),
+                        -(1_000_000_000 + int(row["id"])),
+                    ),
+                )
+                rowcount = _cursor_attribute(cursor, "rowcount")
+
+                if rowcount is not None and rowcount != 1:
+                    raise PalletConflictError(
+                        "管理番号の更新に失敗しました。変更を中止します。"
+                    )
+
+        if plan_id is not None:
+            cursor = _execute(
+                conn,
+                """
+                UPDATE pallet_receiving_plans
+                SET category_start_sequence = ?, updated_at = ?
+                WHERE id = ? AND category_start_sequence = ?
+                """,
+                (
+                    new_start_sequence,
+                    _now(),
+                    plan_id,
+                    int(plan["category_start_sequence"]),
+                ),
+            )
+            rowcount = _cursor_attribute(cursor, "rowcount")
+
+            if rowcount is not None and rowcount != 1:
+                raise PalletConflictError(
+                    "別の端末で入庫管理票が更新されました。"
+                    "画面を更新してください。"
+                )
+
+        _execute(
+            conn,
+            """
+            UPDATE pallet_categories
+            SET
+                next_sequence = CASE
+                    WHEN next_sequence < ? THEN ?
+                    ELSE next_sequence
+                END,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (
+                new_end_sequence + 1,
+                new_end_sequence + 1,
+                _now(),
+                category_id,
+            ),
+        )
+        conn.commit()
+        return {
+            "source_type": normalized_source_type,
+            "registration_status": (
+                str(plan.get("status") or "")
+                if plan is not None
+                else "入庫済み"
+            ),
+            "receipt_code": receipt_code,
+            "batch_code": normalized_batch_code,
+            "category_id": category_id,
+            "category_name": category_name,
+            "pallet_count": pallet_count,
+            "old_start_sequence": old_start_sequence,
+            "old_end_sequence": old_end_sequence,
+            "new_start_sequence": new_start_sequence,
+            "new_end_sequence": new_end_sequence,
+        }
+
+    except Exception:
+        _rollback_safely(conn)
+        raise
+
+
 def get_items_for_company(conn, company_id):
     """
-    パレット登録で選択できる商品を取得する。
+    指定業者で過去にパレット登録した商品候補を取得する。
 
-    現行SHARKのDBでは companies と projects に直接の紐付けがないため、
-    company_id は登録する荷主の選択値としてのみ使用し、商品一覧の
-    絞り込みには使わない。
+    在庫確定済みデータと入庫予定データの両方を参照するため、
+    登録直後の商品も次回から候補に表示される。取消・論理削除済みは
+    候補から除外し、同じ商品情報は最新の1件へまとめる。
     """
 
-    # 呼び出し側との互換性のため引数は残す。
-    _ = company_id
+    try:
+        normalized_company_id = int(company_id)
+    except (TypeError, ValueError) as exc:
+        raise PalletStockError(
+            "商品候補を取得する業者情報が不正です。"
+        ) from exc
 
     cursor = _execute(
         conn,
-        """
+        f"""
         SELECT
-            i.id,
-            i.code,
-            i.name,
-            p.id AS project_id,
-            p.code AS project_code,
-            p.name AS project_name
-        FROM items i
-        LEFT JOIN projects p
-            ON p.id = i.project_id
-        WHERE
-            COALESCE(i.is_hidden, FALSE) = FALSE
-            AND COALESCE(i.is_active, TRUE) = TRUE
-            AND (
-                COALESCE(p.is_hidden, FALSE) = FALSE
-                OR p.id IS NULL
-            )
-        ORDER BY
-            p.name,
-            i.name
-        """
-    )
+            registered.item_id AS id,
+            registered.item_id,
+            registered.project_id,
+            registered.item_code AS code,
+            registered.item_name AS name,
+            registered.category_id,
+            registered.category_name,
+            registered.updated_at
+        FROM (
+            SELECT
+                pi.item_id,
+                pi.project_id,
+                COALESCE(NULLIF(pi.item_code, ''), i.code, '')
+                    AS item_code,
+                COALESCE(NULLIF(pi.item_name, ''), i.name, '')
+                    AS item_name,
+                pi.category_id,
+                COALESCE(NULLIF(pi.category_name, ''), '未分類')
+                    AS category_name,
+                pi.updated_at
+            FROM pallet_inventory pi
+            LEFT JOIN items i
+                ON i.id = pi.item_id
+            LEFT JOIN pallet_categories pc
+                ON pc.id = pi.category_id
+            WHERE
+                pi.company_id = ?
+                AND {_not_deleted_condition("pi.is_deleted")}
+                AND COALESCE(pc.is_active, TRUE) = TRUE
 
-    return _fetchall_dict(cursor)
+            UNION ALL
+
+            SELECT
+                rp.item_id,
+                rp.project_id,
+                COALESCE(NULLIF(rp.item_code, ''), i.code, '')
+                    AS item_code,
+                COALESCE(NULLIF(rp.item_name, ''), i.name, '')
+                    AS item_name,
+                rp.category_id,
+                COALESCE(NULLIF(rp.category_name, ''), '未分類')
+                    AS category_name,
+                rp.updated_at
+            FROM pallet_receiving_plans rp
+            LEFT JOIN items i
+                ON i.id = rp.item_id
+            LEFT JOIN pallet_categories pc
+                ON pc.id = rp.category_id
+            WHERE
+                rp.company_id = ?
+                AND {_not_deleted_condition("rp.is_deleted")}
+                AND rp.status <> '取消'
+                AND COALESCE(pc.is_active, TRUE) = TRUE
+        ) registered
+        WHERE COALESCE(registered.item_name, '') <> ''
+        ORDER BY registered.updated_at DESC
+        """,
+        (normalized_company_id, normalized_company_id),
+    )
+    rows = _fetchall_dict(cursor)
+    unique_items = []
+    seen = set()
+
+    for row in rows:
+        item_code = str(row.get("code") or "").strip()
+        item_name = str(row.get("name") or "").strip()
+        category_name = str(
+            row.get("category_name") or "未分類"
+        ).strip()
+        category_id = row.get("category_id")
+        deduplication_key = (
+            item_code.casefold(),
+            item_name.casefold(),
+            (
+                int(category_id)
+                if category_id not in (None, "")
+                else category_name.casefold()
+            ),
+        )
+
+        if deduplication_key in seen:
+            continue
+
+        seen.add(deduplication_key)
+        normalized_row = dict(row)
+        normalized_row["code"] = item_code
+        normalized_row["name"] = item_name
+        normalized_row["category_name"] = category_name
+        unique_items.append(normalized_row)
+
+    return unique_items
 
 
 def create_pallet_batch(
@@ -798,6 +1476,20 @@ def _normalize_receipt_code(receipt_or_pallet_code):
     # 桁数を3桁へ固定せず、事前登録で発行した全QRを受け付ける。
     match = re.fullmatch(r"(IN-\d{6}-\d+)-P\d+", normalized)
     return match.group(1) if match else normalized
+
+
+def _normalize_receiving_pallet_code(receipt_or_pallet_code):
+    """入庫用QRを解析し、管理票番号・パレット順番を返す。"""
+
+    normalized = str(receipt_or_pallet_code or "").strip().upper()
+    match = re.fullmatch(r"(IN-\d{6}-\d+)-P(\d+)", normalized)
+
+    if match is None:
+        raise PalletStockError(
+            "パレットごとのA4にあるQRを読み取ってください。"
+        )
+
+    return normalized, match.group(1), int(match.group(2))
 
 
 def _normalize_receiving_date(value):
@@ -1180,6 +1872,12 @@ def cancel_receiving_plan(conn, receipt_code):
             "入庫待ち以外の管理票は取り消せません。"
         )
 
+    if str(plan.get("batch_code") or "").strip():
+        raise PalletStockError(
+            "この管理票は一部のパレットが入庫済みです。"
+            "管理票全体の取消はできません。"
+        )
+
     try:
         cursor = _execute(
             conn,
@@ -1209,80 +1907,265 @@ def cancel_receiving_plan(conn, receipt_code):
 
 
 def confirm_receiving_plan(conn, receipt_or_pallet_code, username):
-    """管理票QRを在庫と入庫履歴へ確定登録する。"""
+    """
+    パレット固有QRを1枚ずつ在庫と入庫履歴へ確定登録する。
 
-    plan = get_receiving_plan_by_code(conn, receipt_or_pallet_code)
+    同じ入庫管理票に複数パレットがあっても、読み取った1枚だけを入庫。
+    全パレットの読取完了時に管理票全体を「入庫済み」へ変更する。
+    """
 
-    if plan is None:
-        raise PalletNotFoundError(
-            "入庫管理票が見つかりません。QRを確認してください。"
-        )
-
-    if plan["status"] == "入庫済み":
-        raise PalletStockError(
-            f"{plan['receipt_code']} はすでに入庫登録済みです。"
-        )
-
-    if plan["status"] != "入庫待ち":
-        raise PalletStockError("取り消された管理票は入庫できません。")
-
-    pallet_count = int(plan["pallet_count"])
-    quantity = int(plan["qty_per_pallet"])
-    allocations = [
-        {
-            "パレット番号": f"{index:03d}",
-            "個数": quantity,
-        }
-        for index in range(1, pallet_count + 1)
-    ]
-    pallet_codes = [
-        f"{plan['receipt_code']}-P{index:03d}"
-        for index in range(1, pallet_count + 1)
-    ]
+    (
+        normalized_pallet_code,
+        receipt_code,
+        pallet_sequence,
+    ) = _normalize_receiving_pallet_code(receipt_or_pallet_code)
     now = _now()
 
     try:
-        batch_code = create_pallet_batch(
-            conn=conn,
-            company_id=plan["company_id"],
-            project_id=plan["project_id"],
-            item_id=plan["item_id"],
-            allocations=allocations,
-            username=username,
-            remarks=plan["remarks"] or "",
-            pallet_codes=pallet_codes,
-            commit=False,
-            item_code=plan["item_code"],
-            item_name=plan["item_name"],
-            category_id=plan["category_id"],
-            category_name=plan["category_name"],
-            category_start_sequence=plan[
-                "category_start_sequence"
-            ],
-        )
+        suffix = " FOR UPDATE" if _is_postgres(conn) else ""
         cursor = _execute(
             conn,
             f"""
-            UPDATE pallet_receiving_plans
-            SET
-                status = '入庫済み',
-                batch_code = ?,
-                confirmed_by = ?,
-                confirmed_at = ?,
-                updated_at = ?
+            SELECT
+                id,
+                receipt_code,
+                company_id,
+                project_id,
+                item_id,
+                item_code,
+                item_name,
+                category_id,
+                category_name,
+                category_start_sequence,
+                pallet_count,
+                qty_per_pallet,
+                total_qty,
+                status,
+                batch_code,
+                remarks
+            FROM pallet_receiving_plans
             WHERE
-                id = ?
-                AND status = '入庫待ち'
+                receipt_code = ?
                 AND {_not_deleted_condition("is_deleted")}
+            LIMIT 1{suffix}
+            """,
+            (receipt_code,),
+        )
+        plan = _fetchone_dict(cursor)
+
+        if plan is None:
+            raise PalletNotFoundError(
+                "入庫管理票が見つかりません。QRを確認してください。"
+            )
+
+        pallet_count = int(plan["pallet_count"])
+
+        if not (1 <= pallet_sequence <= pallet_count):
+            raise PalletStockError(
+                "この管理票に存在しないパレット番号です。"
+            )
+
+        category_sequence = (
+            int(plan["category_start_sequence"])
+            + pallet_sequence
+            - 1
+        )
+
+        existing_cursor = _execute(
+            conn,
+            """
+            SELECT id
+            FROM pallet_inventory
+            WHERE pallet_code = ?
+            LIMIT 1
+            """,
+            (normalized_pallet_code,),
+        )
+
+        if _fetchone_dict(existing_cursor) is not None:
+            raise PalletStockError(
+                f"パレットナンバー {category_sequence:03d} は"
+                "すでに入庫済みです。"
+            )
+
+        if plan["status"] == "入庫済み":
+            raise PalletStockError(
+                f"{plan['receipt_code']} はすべて入庫済みです。"
+            )
+
+        if plan["status"] != "入庫待ち":
+            raise PalletStockError("取り消された管理票は入庫できません。")
+
+        batch_code = str(plan.get("batch_code") or "").strip().upper()
+
+        if not batch_code:
+            batch_code = _create_batch_code()
+
+        quantity = int(plan["qty_per_pallet"])
+        normalized_item_code = str(plan.get("item_code") or "").strip()
+        normalized_item_name = str(plan.get("item_name") or "").strip()
+
+        if plan.get("item_id") not in (None, "") and (
+            not normalized_item_code or not normalized_item_name
+        ):
+            item_cursor = _execute(
+                conn,
+                "SELECT code, name FROM items WHERE id = ? LIMIT 1",
+                (int(plan["item_id"]),),
+            )
+            item_row = _fetchone_dict(item_cursor) or {}
+            normalized_item_code = (
+                normalized_item_code
+                or str(item_row.get("code") or "").strip()
+            )
+            normalized_item_name = (
+                normalized_item_name
+                or str(item_row.get("name") or "").strip()
+            )
+
+        if not normalized_item_name:
+            raise PalletStockError("商品名が登録されていません。")
+
+        pallet_id = _insert_and_get_id(
+            conn,
+            """
+            INSERT INTO pallet_inventory (
+                pallet_code,
+                batch_code,
+                pallet_sequence,
+                total_pallets,
+                company_id,
+                project_id,
+                item_id,
+                item_code,
+                item_name,
+                category_id,
+                category_name,
+                category_sequence,
+                initial_qty,
+                current_qty,
+                status,
+                location,
+                remarks,
+                created_by,
+                created_at,
+                updated_at
+            )
+            VALUES (
+                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                '保管中', NULL, ?, ?, ?, ?
+            )
             """,
             (
+                normalized_pallet_code,
                 batch_code,
+                pallet_sequence,
+                pallet_count,
+                int(plan["company_id"]),
+                plan.get("project_id"),
+                plan.get("item_id"),
+                normalized_item_code,
+                normalized_item_name,
+                int(plan["category_id"]),
+                str(plan.get("category_name") or ""),
+                category_sequence,
+                quantity,
+                quantity,
+                str(plan.get("remarks") or "").strip() or None,
                 username,
                 now,
                 now,
-                int(plan["id"]),
             ),
         )
+        _execute(
+            conn,
+            """
+            INSERT INTO pallet_history (
+                pallet_id,
+                pallet_code,
+                history_type,
+                qty,
+                before_qty,
+                after_qty,
+                username,
+                remarks,
+                created_at
+            )
+            VALUES (?, ?, '入庫', ?, 0, ?, ?, ?, ?)
+            """,
+            (
+                pallet_id,
+                normalized_pallet_code,
+                quantity,
+                quantity,
+                username,
+                str(plan.get("remarks") or "").strip() or None,
+                now,
+            ),
+        )
+        count_cursor = _execute(
+            conn,
+            f"""
+            SELECT COUNT(*) AS confirmed_count
+            FROM pallet_inventory
+            WHERE
+                batch_code = ?
+                AND {_not_deleted_condition("is_deleted")}
+            """,
+            (batch_code,),
+        )
+        count_row = _fetchone_dict(count_cursor) or {}
+        confirmed_count = int(count_row.get("confirmed_count") or 0)
+        completed = confirmed_count >= pallet_count
+
+        if completed:
+            cursor = _execute(
+                conn,
+                f"""
+                UPDATE pallet_receiving_plans
+                SET
+                    status = '入庫済み',
+                    batch_code = ?,
+                    confirmed_by = ?,
+                    confirmed_at = ?,
+                    updated_at = ?
+                WHERE
+                    id = ?
+                    AND status = '入庫待ち'
+                    AND {_not_deleted_condition("is_deleted")}
+                """,
+                (
+                    batch_code,
+                    username,
+                    now,
+                    now,
+                    int(plan["id"]),
+                ),
+            )
+        else:
+            cursor = _execute(
+                conn,
+                f"""
+                UPDATE pallet_receiving_plans
+                SET batch_code = ?, updated_at = ?
+                WHERE
+                    id = ?
+                    AND status = '入庫待ち'
+                    AND (
+                        batch_code IS NULL
+                        OR batch_code = ''
+                        OR batch_code = ?
+                    )
+                    AND {_not_deleted_condition("is_deleted")}
+                """,
+                (
+                    batch_code,
+                    now,
+                    int(plan["id"]),
+                    batch_code,
+                ),
+            )
+
         rowcount = _cursor_attribute(cursor, "rowcount")
 
         if rowcount is not None and rowcount != 1:
@@ -1295,8 +2178,14 @@ def confirm_receiving_plan(conn, receipt_or_pallet_code, username):
         return {
             "receipt_code": plan["receipt_code"],
             "batch_code": batch_code,
+            "pallet_code": normalized_pallet_code,
+            "pallet_sequence": pallet_sequence,
+            "category_sequence": category_sequence,
+            "received_qty": quantity,
             "pallet_count": pallet_count,
-            "total_qty": int(plan["total_qty"]),
+            "confirmed_pallets": confirmed_count,
+            "remaining_pallets": max(0, pallet_count - confirmed_count),
+            "completed": completed,
         }
 
     except Exception:
@@ -1441,7 +2330,16 @@ def list_editable_pallet_batches(conn):
             ON p.id = pi.project_id
         LEFT JOIN items i
             ON i.id = pi.item_id
-        WHERE {_not_deleted_condition("pi.is_deleted")}
+        WHERE
+            {_not_deleted_condition("pi.is_deleted")}
+            AND NOT EXISTS (
+                SELECT 1
+                FROM pallet_receiving_plans rp
+                WHERE
+                    rp.batch_code = pi.batch_code
+                    AND rp.status = '入庫待ち'
+                    AND {_not_deleted_condition("rp.is_deleted")}
+            )
         GROUP BY pi.batch_code
         HAVING
             SUM(
@@ -1505,6 +2403,26 @@ def _get_editable_batch_rows(conn, batch_code):
     if not rows:
         raise PalletNotFoundError(
             f"登録No「{normalized_batch_code}」が見つかりません。"
+        )
+
+    partial_cursor = _execute(
+        conn,
+        f"""
+        SELECT id
+        FROM pallet_receiving_plans
+        WHERE
+            batch_code = ?
+            AND status = '入庫待ち'
+            AND {_not_deleted_condition("is_deleted")}
+        LIMIT 1
+        """,
+        (normalized_batch_code,),
+    )
+
+    if _fetchone_dict(partial_cursor) is not None:
+        raise PalletStockError(
+            "この登録は一部パレットが未入庫です。"
+            "全パレットの入庫後に修正してください。"
         )
 
     for row in rows:

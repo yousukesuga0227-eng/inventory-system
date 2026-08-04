@@ -11,14 +11,19 @@ from pages.pallet.pallet_db import (
     confirm_receiving_plan,
     create_receiving_plan,
     delete_pallet_batch,
+    get_pallet_category_numbering_limit,
     get_batch_pallets,
+    get_items_for_company,
     get_pallet_by_code,
     get_receiving_plan_by_code,
     list_editable_pallet_batches,
     list_pallet_categories,
     list_pallet_history,
+    list_pallet_numbering_registrations,
     list_pallet_stock,
     list_receiving_plans,
+    renumber_pallet_registration,
+    set_pallet_category_next_sequence,
     ship_pallet,
     update_pallet_batch,
 )
@@ -233,6 +238,26 @@ def editable_batch_label(batch):
     )
 
 
+def numbering_registration_label(registration):
+    """採番管理の選択肢を、現在番号と商品が分かる表示にする。"""
+
+    receipt_code = str(
+        row_value(registration, "receipt_code", "") or ""
+    ).strip()
+    batch_code = str(
+        row_value(registration, "batch_code", "") or ""
+    ).strip()
+    reference_code = receipt_code or batch_code
+    return (
+        f"{row_value(registration, 'registration_status', '')}｜"
+        f"{reference_code}｜"
+        f"{row_value(registration, 'category_name', '')} "
+        f"{management_number(registration)}｜"
+        f"{row_value(registration, 'company_name', '')}｜"
+        f"{row_value(registration, 'item_name', '')}"
+    )
+
+
 # ============================================================
 # 4つだけの通常画面
 # ============================================================
@@ -297,50 +322,169 @@ with tab_register:
             "大カテゴリーがありません。DB導入スクリプトを確認してください。"
         )
     else:
+        # 業者と登録済み商品の選択はフォーム外に置く。
+        # これにより、業者を変えた瞬間に商品候補を絞り込める。
+        company_label = st.selectbox(
+            "業者名",
+            options=list(company_map.keys()),
+            key="simple_plan_company",
+        )
+        selected_company = company_map[company_label]
+
+        registered_items = get_items_for_company(
+            conn,
+            selected_company["id"],
+        )
+        new_item_option = "＋ 新しい商品を直接入力"
+        registered_item_map = {}
+
+        for item_index, item in enumerate(registered_items, start=1):
+            item_code = str(row_value(item, "code", "") or "").strip()
+            item_name = str(row_value(item, "name", "") or "").strip()
+            category_name = str(
+                row_value(item, "category_name", "未分類") or "未分類"
+            ).strip()
+            code_display = item_code or "コードなし"
+            option_label = (
+                f"{code_display}｜{category_name}｜{item_name}"
+            )
+
+            # 同名・同コードの履歴が万一残っていても、selectboxの
+            # 選択肢が重複しないようにする。
+            if option_label in registered_item_map:
+                option_label = f"{option_label}（{item_index}）"
+
+            registered_item_map[option_label] = item
+
+        item_options = [new_item_option] + list(
+            registered_item_map.keys()
+        )
+        selected_item_label = st.selectbox(
+            "登録する商品",
+            options=item_options,
+            key=(
+                "simple_plan_registered_item_"
+                f"{selected_company['id']}"
+            ),
+        )
+        selected_registered_item = registered_item_map.get(
+            selected_item_label
+        )
+
+        if registered_items:
+            st.caption(
+                f"この業者の登録済み商品：{len(registered_items):,}件"
+            )
+        else:
+            st.info(
+                "この業者には登録済み商品がありません。"
+                "新しい商品を入力してください。"
+            )
+
         form_version = st.session_state.simple_plan_form_version
 
         with st.form(f"simple_receiving_plan_form_{form_version}"):
-            top_col1, top_col2 = st.columns(2)
+            receiving_date_value = st.date_input(
+                "入庫予定日",
+                value=date.today(),
+            )
 
-            with top_col1:
-                receiving_date_value = st.date_input(
-                    "入庫予定日",
-                    value=date.today(),
+            if selected_registered_item is not None:
+                selected_item_id = row_value(
+                    selected_registered_item,
+                    "item_id",
+                    row_value(selected_registered_item, "id"),
                 )
-
-            with top_col2:
-                company_label = st.selectbox(
-                    "業者名",
-                    options=list(company_map.keys()),
+                selected_project_id = row_value(
+                    selected_registered_item,
+                    "project_id",
                 )
+                selected_category_id = row_value(
+                    selected_registered_item,
+                    "category_id",
+                )
+                selected_category_name = str(
+                    row_value(
+                        selected_registered_item,
+                        "category_name",
+                        "未分類",
+                    )
+                    or "未分類"
+                ).strip()
+                item_code_value = str(
+                    row_value(selected_registered_item, "code", "") or ""
+                ).strip()
+                item_name_value = str(
+                    row_value(selected_registered_item, "name", "") or ""
+                ).strip()
 
-            category_col1, category_col2 = st.columns(2)
-
-            with category_col1:
-                category_label = st.selectbox(
+                st.text_input(
                     "大カテゴリー",
-                    options=list(category_map.keys()),
+                    value=selected_category_name,
+                    disabled=True,
+                )
+                item_col1, item_col2 = st.columns(2)
+
+                with item_col1:
+                    st.text_input(
+                        "商品コード",
+                        value=item_code_value,
+                        disabled=True,
+                    )
+
+                with item_col2:
+                    st.text_input(
+                        "商品名",
+                        value=item_name_value,
+                        disabled=True,
+                    )
+
+                st.caption(
+                    "登録済みの商品情報を自動入力しました。"
+                    "変更する場合は「新しい商品を直接入力」を選んでください。"
                 )
 
-            with category_col2:
-                new_category_name = st.text_input(
-                    "新しい大カテゴリー（新規のときだけ）",
-                    value="",
-                )
+            else:
+                selected_item_id = None
+                selected_project_id = None
+                category_col1, category_col2 = st.columns(2)
 
-            item_col1, item_col2 = st.columns(2)
+                with category_col1:
+                    category_label = st.selectbox(
+                        "大カテゴリー",
+                        options=list(category_map.keys()),
+                    )
 
-            with item_col1:
-                item_code_value = st.text_input(
-                    "商品コード（任意）",
-                    value="",
-                )
+                with category_col2:
+                    new_category_name = st.text_input(
+                        "新しい大カテゴリー（新規のときだけ）",
+                        value="",
+                    )
 
-            with item_col2:
-                item_name_value = st.text_input(
-                    "商品名",
-                    value="",
-                )
+                item_col1, item_col2 = st.columns(2)
+
+                with item_col1:
+                    item_code_value = st.text_input(
+                        "商品コード（任意）",
+                        value="",
+                    )
+
+                with item_col2:
+                    item_name_value = st.text_input(
+                        "商品名",
+                        value="",
+                    )
+
+                normalized_new_category = str(
+                    new_category_name or ""
+                ).strip()
+
+                if normalized_new_category:
+                    selected_category_id = None
+                    selected_category_name = normalized_new_category
+                else:
+                    selected_category_id = category_map[category_label]
+                    selected_category_name = category_label
 
             qty_col1, qty_col2 = st.columns(2)
 
@@ -376,29 +520,17 @@ with tab_register:
 
         if register_submitted:
             normalized_item_name = str(item_name_value or "").strip()
-            normalized_new_category = str(
-                new_category_name or ""
-            ).strip()
 
             if not normalized_item_name:
                 st.error("商品名を入力してください。")
             else:
-                selected_company = company_map[company_label]
-
-                if normalized_new_category:
-                    selected_category_id = None
-                    selected_category_name = normalized_new_category
-                else:
-                    selected_category_id = category_map[category_label]
-                    selected_category_name = category_label
-
                 try:
                     receipt_code = create_receiving_plan(
                         conn=conn,
                         receiving_date=receiving_date_value,
                         company_id=selected_company["id"],
-                        project_id=None,
-                        item_id=None,
+                        project_id=selected_project_id,
+                        item_id=selected_item_id,
                         pallet_count=int(pallet_count),
                         qty_per_pallet=int(qty_per_pallet),
                         username=username,
@@ -442,7 +574,7 @@ with tab_register:
 with tab_qr:
     st.subheader("QRを読んで入出庫")
     st.caption(
-        "バーコードリーダーのEnter送信でそのまま確定します。"
+        "入庫はA4を1枚ずつ読み取り、読み取ったパレットだけ確定します。"
         "通常の出庫は1パレット全数です。"
     )
 
@@ -492,8 +624,17 @@ with tab_qr:
                     username=username,
                 )
                 st.session_state.simple_qr_flash = (
-                    f"{result['receipt_code']} を入庫しました。 "
-                    f"商品総数：{int(result['total_qty']):,}個"
+                    "パレットナンバー "
+                    f"{int(result['category_sequence']):03d}　"
+                    f"{int(result['received_qty']):,}個 入庫確定"
+                    + (
+                        f"（全{int(result['pallet_count']):,}枚の入庫完了）"
+                        if result["completed"]
+                        else (
+                            "（残り"
+                            f"{int(result['remaining_pallets']):,}枚）"
+                        )
+                    )
                 )
                 st.rerun()
 
@@ -638,6 +779,280 @@ with tab_history:
                 use_container_width=True,
             )
 
+        with st.expander(
+            "採番管理（登録済み番号・次回開始番号）",
+            expanded=False,
+        ):
+            st.caption(
+                "管理番号だけを変更します。QRコードは変わりません。"
+                "複数パレットは開始番号から連番のまま移動します。"
+            )
+
+            st.write("登録済み番号を変更")
+            numbering_registrations = list_pallet_numbering_registrations(
+                conn,
+                limit=1000,
+            )
+
+            if not numbering_registrations:
+                st.info("採番変更できる登録はありません。")
+            else:
+                numbering_registration_map = {
+                    numbering_registration_label(registration): registration
+                    for registration in numbering_registrations
+                }
+                selected_numbering_label = st.selectbox(
+                    "番号を変更する登録",
+                    options=list(numbering_registration_map.keys()),
+                    key="simple_numbering_registration",
+                )
+                selected_numbering = numbering_registration_map[
+                    selected_numbering_label
+                ]
+                current_start_sequence = int(
+                    row_value(
+                        selected_numbering,
+                        "category_start_sequence",
+                        1,
+                    )
+                )
+                selected_pallet_count = int(
+                    row_value(selected_numbering, "pallet_count", 1)
+                )
+                current_end_sequence = current_start_sequence + (
+                    selected_pallet_count - 1
+                )
+                source_type = str(
+                    row_value(selected_numbering, "source_type", "")
+                )
+                registration_id = int(
+                    row_value(selected_numbering, "registration_id", 0)
+                )
+
+                number_info_col1, number_info_col2 = st.columns(2)
+
+                with number_info_col1:
+                    st.metric(
+                        "現在の番号",
+                        (
+                            f"{current_start_sequence:03d}"
+                            if current_start_sequence
+                            == current_end_sequence
+                            else (
+                                f"{current_start_sequence:03d}～"
+                                f"{current_end_sequence:03d}"
+                            )
+                        ),
+                    )
+
+                with number_info_col2:
+                    st.metric(
+                        "パレット枚数",
+                        f"{selected_pallet_count:,}枚",
+                    )
+
+                with st.form(
+                    "simple_numbering_renumber_form_"
+                    f"{source_type}_{registration_id}"
+                ):
+                    new_start_sequence = st.number_input(
+                        "変更後の開始番号",
+                        min_value=1,
+                        max_value=999_999,
+                        value=current_start_sequence,
+                        step=1,
+                    )
+                    renumber_confirmed = st.checkbox(
+                        "番号変更後にA4を再印刷する"
+                    )
+                    renumber_submitted = st.form_submit_button(
+                        "登録済み番号を変更",
+                        type="primary",
+                        use_container_width=True,
+                    )
+
+                if renumber_submitted:
+                    if not renumber_confirmed:
+                        st.warning("確認にチェックを入れてください。")
+                    else:
+                        try:
+                            renumber_result = renumber_pallet_registration(
+                                conn=conn,
+                                source_type=source_type,
+                                registration_id=registration_id,
+                                batch_code=row_value(
+                                    selected_numbering,
+                                    "batch_code",
+                                    "",
+                                ),
+                                new_start_sequence=int(new_start_sequence),
+                            )
+
+                            if renumber_result["source_type"] == "batch":
+                                renumbered_rows = get_batch_pallets(
+                                    conn,
+                                    renumber_result["batch_code"],
+                                )
+                                st.session_state.simple_admin_pdf = (
+                                    create_pallet_a4_pdf(renumbered_rows)
+                                )
+                                st.session_state.simple_admin_pdf_name = (
+                                    "pallet_"
+                                    f"{renumber_result['batch_code']}.pdf"
+                                )
+                            else:
+                                renumbered_plan = (
+                                    get_receiving_plan_by_code(
+                                        conn,
+                                        renumber_result["receipt_code"],
+                                    )
+                                )
+                                st.session_state.simple_admin_pdf = (
+                                    create_receiving_plan_a4_pdf(
+                                        [renumbered_plan]
+                                    )
+                                )
+                                st.session_state.simple_admin_pdf_name = (
+                                    "receiving_"
+                                    f"{renumber_result['receipt_code']}.pdf"
+                                )
+
+                            st.session_state.simple_admin_flash = (
+                                "管理番号を "
+                                f"{renumber_result['new_start_sequence']:03d}"
+                                + (
+                                    ""
+                                    if renumber_result[
+                                        "new_start_sequence"
+                                    ]
+                                    == renumber_result["new_end_sequence"]
+                                    else (
+                                        "～"
+                                        f"{renumber_result['new_end_sequence']:03d}"
+                                    )
+                                )
+                                + " に変更しました。A4を再印刷してください。"
+                            )
+                            st.rerun()
+
+                        except PalletError as exc:
+                            st.error(str(exc))
+
+                        except Exception as exc:
+                            st.error(
+                                "採番変更中にエラーが発生しました："
+                                f"{exc}"
+                            )
+
+            st.divider()
+            st.write("次回の採番開始番号を変更")
+            numbering_categories = list_pallet_categories(
+                conn,
+                include_hidden=True,
+            )
+
+            if not numbering_categories:
+                st.info("大カテゴリーがありません。")
+            else:
+                numbering_category_map = {
+                    (
+                        f"{row_value(category, 'name', '')}｜"
+                        "現在の次回番号 "
+                        f"{int(row_value(category, 'next_sequence', 1)):03d}"
+                    ): category
+                    for category in numbering_categories
+                }
+                selected_category_label = st.selectbox(
+                    "大カテゴリー",
+                    options=list(numbering_category_map.keys()),
+                    key="simple_numbering_category",
+                )
+                selected_numbering_category = numbering_category_map[
+                    selected_category_label
+                ]
+                selected_numbering_category_id = int(
+                    row_value(selected_numbering_category, "id", 0)
+                )
+                category_limit = get_pallet_category_numbering_limit(
+                    conn,
+                    selected_numbering_category_id,
+                )
+                current_next_sequence = int(
+                    category_limit["current_next_sequence"]
+                )
+                minimum_next_sequence = int(
+                    category_limit["minimum_next_sequence"]
+                )
+
+                next_info_col1, next_info_col2 = st.columns(2)
+
+                with next_info_col1:
+                    st.metric(
+                        "現在の次回番号",
+                        f"{current_next_sequence:03d}",
+                    )
+
+                with next_info_col2:
+                    st.metric(
+                        "設定できる最小番号",
+                        f"{minimum_next_sequence:03d}",
+                    )
+
+                with st.form(
+                    "simple_numbering_next_form_"
+                    f"{selected_numbering_category_id}"
+                ):
+                    new_next_sequence = st.number_input(
+                        "新しい次回開始番号",
+                        min_value=minimum_next_sequence,
+                        max_value=999_999,
+                        value=max(
+                            current_next_sequence,
+                            minimum_next_sequence,
+                        ),
+                        step=1,
+                    )
+                    next_sequence_confirmed = st.checkbox(
+                        "次回の登録からこの番号を使う"
+                    )
+                    next_sequence_submitted = st.form_submit_button(
+                        "次回開始番号を変更",
+                        type="primary",
+                        use_container_width=True,
+                    )
+
+                if next_sequence_submitted:
+                    if not next_sequence_confirmed:
+                        st.warning("確認にチェックを入れてください。")
+                    else:
+                        try:
+                            next_result = (
+                                set_pallet_category_next_sequence(
+                                    conn=conn,
+                                    category_id=(
+                                        selected_numbering_category_id
+                                    ),
+                                    next_sequence=int(new_next_sequence),
+                                )
+                            )
+                            st.session_state.simple_admin_flash = (
+                                f"{next_result['category_name']} の"
+                                "次回開始番号を "
+                                f"{next_result['next_sequence']:03d} "
+                                "に変更しました。"
+                            )
+                            st.rerun()
+
+                        except PalletError as exc:
+                            st.error(str(exc))
+
+                        except Exception as exc:
+                            st.error(
+                                "次回開始番号の変更中にエラーが"
+                                f"発生しました：{exc}"
+                            )
+
+        st.divider()
         st.write("入庫待ちのA4再印刷・取消")
         pending_plans = list_receiving_plans(
             conn,
