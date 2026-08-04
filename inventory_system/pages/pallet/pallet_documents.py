@@ -15,9 +15,8 @@ from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfgen import canvas
 
 
-from pages.pallet.pallet_qr import build_pallet_qr_payload
 
-# === SHARK PALLET INFORMATION QR START ===
+# === SHARK PALLET SIMPLE QR START ===
 
 FONT_NAME = "SHARK-NotoSansJP"
 FALLBACK_FONT_NAME = "HeiseiKakuGo-W5"
@@ -324,18 +323,7 @@ def create_pallet_a4_pdf(pallets):
 
         _draw_qr(
             pdf=pdf,
-            value=build_pallet_qr_payload(
-                pallet_code=pallet_code,
-                item_code=_value(pallet, "item_code", ""),
-                customer_code=_value(pallet, "company_code", ""),
-                customer_name=company_name,
-                category_name=category_name,
-                item_name=item_name,
-                quantity=quantity,
-                management_number=pallet_number,
-                batch_code=_value(pallet, "batch_code", ""),
-                pallet_sequence=_value(pallet, "pallet_sequence", ""),
-            ),
+            value=pallet_code,
             x=qr_x,
             y=qr_y,
             size=qr_size,
@@ -502,18 +490,7 @@ def create_receiving_plan_a4_pdf(plans):
             )
             _draw_qr(
                 pdf=pdf,
-                    value=build_pallet_qr_payload(
-                    pallet_code=pallet_code,
-                    item_code=_value(plan, "item_code", ""),
-                    customer_code=_value(plan, "company_code", ""),
-                    customer_name=company_name,
-                    category_name=category_name,
-                    item_name=item_name,
-                    quantity=qty_per_pallet,
-                    management_number=f"{pallet_number:03d}",
-                    receipt_code=receipt_code,
-                    pallet_sequence=sequence,
-                ),
+                    value=pallet_code,
                 x=qr_x,
                 y=qr_y,
                 size=qr_size,
