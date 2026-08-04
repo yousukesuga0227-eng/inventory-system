@@ -1,4 +1,7 @@
+import json
 import re
+
+from item_code_qr import extract_item_code_from_qr
 
 
 UNIT_NUMBER_DIGITS = 3
@@ -9,14 +12,54 @@ _UNIT_BARCODE_PATTERN = re.compile(
 )
 
 
+def _extract_json_item_code(value):
+    """将来JSON形式のQRを使っても商品コードを拾えるようにする。"""
+    text = str(value or "").strip()
+    if not (text.startswith("{") and text.endswith("}")):
+        return None
+
+    try:
+        data = json.loads(text)
+    except (json.JSONDecodeError, TypeError):
+        return None
+
+    if not isinstance(data, dict):
+        return None
+
+    item_code = (
+        data.get("item_code")
+        or data.get("item")
+        or data.get("code")
+    )
+    if not item_code:
+        return None
+
+    unit_number = data.get("unit_number") or data.get("unit")
+    if unit_number is not None and str(unit_number).isdigit():
+        return f"{str(item_code).strip()}-{int(unit_number):03d}"
+    return str(item_code).strip()
+
+
 def normalize_scanned_barcode(value):
     """
-    バーコードリーダーから受け取った文字列をSHARKの商品コード形式へ整える。
+    バーコードリーダー／QRリーダーの入力をSHARKの商品コード形式へ整える。
 
-    旧形式の「案件コード_商品コード」と、新形式の
-    「案件コード_商品コード-001」の両方に対応する。
+    対応形式:
+    - SHARK1|TYPE=ITEM|ITEM=... の情報入りQR
+    - JSON形式のQR（将来互換）
+    - 旧形式の「案件コード_商品コード」
+    - 商品コードそのもの
+    - 商品コード末尾に3桁の個体番号を付けた形式
     """
     barcode_text = str(value or "").strip()
+
+    qr_item_code = extract_item_code_from_qr(barcode_text)
+    if qr_item_code:
+        return qr_item_code
+
+    json_item_code = _extract_json_item_code(barcode_text)
+    if json_item_code:
+        return json_item_code
 
     if "_" in barcode_text:
         barcode_text = barcode_text.split("_")[-1]
@@ -45,7 +88,8 @@ def split_unit_barcode(value):
     """
     戻り値は (商品コード本体, 個体連番)。
 
-    旧バーコードなど末尾3桁の個体連番が無い場合、個体連番はNone。
+    末尾3桁の個体連番が無い場合、個体連番はNone。
+    商品コード本体の末尾4桁連番とは混同しない。
     """
     barcode_text = normalize_scanned_barcode(value)
     match = _UNIT_BARCODE_PATTERN.fullmatch(barcode_text)

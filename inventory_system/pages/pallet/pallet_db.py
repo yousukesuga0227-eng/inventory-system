@@ -3028,3 +3028,198 @@ def list_pallet_history(
     )
 
     return _fetchall_dict(cursor)
+
+# === SHARK PALLET ITEM NUMBERING COMPLETE START ===
+# パレット在庫専用。通常の商品管理ページには影響しない。
+from pages.pallet.pallet_item_numbering import (
+    PalletItemNumberingError,
+    resolve_pallet_item_code,
+    set_pallet_category_code,
+)
+from pages.pallet.pallet_qr import extract_pallet_code
+
+
+_original_create_receiving_plans_item_numbering = create_receiving_plans
+_original_create_receiving_plan_item_numbering = create_receiving_plan
+_original_create_pallet_batch_item_numbering = create_pallet_batch
+_original_confirm_receiving_plan_information_qr = confirm_receiving_plan
+_original_get_receiving_plan_information_qr = get_receiving_plan_by_code
+_original_get_pallet_information_qr = get_pallet_by_code
+_original_ship_pallet_information_qr = ship_pallet
+
+
+def create_receiving_plans(conn, plans, username):
+    enhanced_plans = []
+
+    try:
+        for source_plan in plans:
+            plan = dict(source_plan)
+            category = _resolve_category(
+                conn=conn,
+                category_id=plan.get("category_id"),
+                category_name=plan.get("category_name", "未分類"),
+                username=username,
+            )
+            plan["category_id"] = int(category["id"])
+            plan["category_name"] = str(category["name"])
+            plan["item_code"] = resolve_pallet_item_code(
+                conn=conn,
+                company_id=plan.get("company_id"),
+                category_id=plan["category_id"],
+                item_name=plan.get("item_name", ""),
+                registered_at=plan.get("receiving_date"),
+                provided_code=plan.get("item_code", ""),
+                username=username,
+            )
+            enhanced_plans.append(plan)
+
+        return _original_create_receiving_plans_item_numbering(
+            conn,
+            enhanced_plans,
+            username,
+        )
+    except PalletItemNumberingError as exc:
+        raise PalletStockError(str(exc)) from exc
+
+
+def create_receiving_plan(
+    conn,
+    receiving_date,
+    company_id,
+    project_id,
+    item_id,
+    pallet_count,
+    qty_per_pallet,
+    username,
+    remarks="",
+    item_code="",
+    item_name="",
+    category_id=None,
+    category_name="未分類",
+    category_code="",
+):
+    resolved_category_id = category_id
+    resolved_category_name = category_name
+
+    try:
+        if str(category_code or "").strip():
+            category = _resolve_category(
+                conn=conn,
+                category_id=category_id,
+                category_name=category_name,
+                username=username,
+            )
+            resolved_category_id = int(category["id"])
+            resolved_category_name = str(category["name"])
+            set_pallet_category_code(
+                conn=conn,
+                category_id=resolved_category_id,
+                category_code=category_code,
+                username=username,
+                commit=True,
+            )
+
+        return _original_create_receiving_plan_item_numbering(
+            conn=conn,
+            receiving_date=receiving_date,
+            company_id=company_id,
+            project_id=project_id,
+            item_id=item_id,
+            pallet_count=pallet_count,
+            qty_per_pallet=qty_per_pallet,
+            username=username,
+            remarks=remarks,
+            item_code=item_code,
+            item_name=item_name,
+            category_id=resolved_category_id,
+            category_name=resolved_category_name,
+        )
+    except PalletItemNumberingError as exc:
+        raise PalletStockError(str(exc)) from exc
+
+
+def create_pallet_batch(
+    conn,
+    company_id,
+    project_id,
+    item_id,
+    allocations,
+    username,
+    location="",
+    remarks="",
+    pallet_codes=None,
+    commit=True,
+    item_code="",
+    item_name="",
+    category_id=None,
+    category_name="",
+    category_start_sequence=None,
+):
+    try:
+        category = _resolve_category(
+            conn=conn,
+            category_id=category_id,
+            category_name=category_name,
+            username=username,
+        )
+        resolved_item_code = resolve_pallet_item_code(
+            conn=conn,
+            company_id=company_id,
+            category_id=int(category["id"]),
+            item_name=item_name,
+            registered_at=_now(),
+            provided_code=item_code,
+            username=username,
+        )
+        return _original_create_pallet_batch_item_numbering(
+            conn=conn,
+            company_id=company_id,
+            project_id=project_id,
+            item_id=item_id,
+            allocations=allocations,
+            username=username,
+            location=location,
+            remarks=remarks,
+            pallet_codes=pallet_codes,
+            commit=commit,
+            item_code=resolved_item_code,
+            item_name=item_name,
+            category_id=int(category["id"]),
+            category_name=str(category["name"]),
+            category_start_sequence=category_start_sequence,
+        )
+    except PalletItemNumberingError as exc:
+        raise PalletStockError(str(exc)) from exc
+
+
+def confirm_receiving_plan(conn, receipt_or_pallet_code, username):
+    return _original_confirm_receiving_plan_information_qr(
+        conn,
+        extract_pallet_code(receipt_or_pallet_code),
+        username,
+    )
+
+
+def get_receiving_plan_by_code(conn, receipt_or_pallet_code):
+    return _original_get_receiving_plan_information_qr(
+        conn,
+        extract_pallet_code(receipt_or_pallet_code),
+    )
+
+
+def get_pallet_by_code(conn, pallet_code):
+    return _original_get_pallet_information_qr(
+        conn,
+        extract_pallet_code(pallet_code),
+    )
+
+
+def ship_pallet(conn, pallet_code, quantity, username):
+    return _original_ship_pallet_information_qr(
+        conn,
+        extract_pallet_code(pallet_code),
+        quantity,
+        username,
+    )
+# === SHARK PALLET ITEM NUMBERING COMPLETE END ===
+

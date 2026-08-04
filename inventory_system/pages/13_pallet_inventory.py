@@ -37,6 +37,16 @@ from pages.pallet.pallet_tables import (
 )
 
 
+from pages.pallet.pallet_item_numbering import (
+    PalletItemNumberingError,
+    apply_existing_pallet_item_numbering,
+    list_pallet_category_code_settings,
+    preview_existing_pallet_item_numbering,
+    set_pallet_category_code,
+)
+
+# === SHARK PALLET ITEM NUMBERING UI START ===
+
 JST = timezone(timedelta(hours=9), name="JST")
 
 
@@ -388,6 +398,7 @@ with tab_register:
                 "入庫予定日",
                 value=date.today(),
             )
+            new_category_code_value = ""
 
             if selected_registered_item is not None:
                 selected_item_id = row_value(
@@ -460,6 +471,13 @@ with tab_register:
                         "新しい大カテゴリー（新規のときだけ）",
                         value="",
                     )
+
+                new_category_code_value = st.text_input(
+                    "新しい大カテゴリーコード（新規のときだけ）",
+                    value="",
+                    placeholder="例：KAG",
+                    help="英数字2～8文字。商品コードの2番目に使用します。",
+                )
 
                 item_col1, item_col2 = st.columns(2)
 
@@ -538,6 +556,7 @@ with tab_register:
                         item_name=normalized_item_name,
                         category_id=selected_category_id,
                         category_name=selected_category_name,
+                        category_code=new_category_code_value,
                     )
                     registered_plan = get_receiving_plan_by_code(
                         conn,
@@ -765,6 +784,126 @@ with tab_history:
         st.caption(
             "通常の入出庫では使いません。誤登録のときだけ開いてください。"
         )
+
+        with st.expander(
+            "商品コード管理（カテゴリーコード・既存商品の一括採番）",
+            expanded=False,
+        ):
+            st.caption(
+                "商品コード形式：顧客コード-大カテゴリーコード-"
+                "初回登録年月-4桁連番"
+            )
+
+            try:
+                category_settings = list_pallet_category_code_settings(conn)
+
+                if not category_settings:
+                    st.info("大カテゴリーがありません。")
+                else:
+                    category_setting_map = {
+                        (
+                            f"{row['category_name']}｜"
+                            f"{row.get('category_code') or '未設定'}"
+                        ): row
+                        for row in category_settings
+                    }
+                    selected_setting_label = st.selectbox(
+                        "コードを設定する大カテゴリー",
+                        options=list(category_setting_map.keys()),
+                        key="pallet_item_category_code_target",
+                    )
+                    selected_setting = category_setting_map[
+                        selected_setting_label
+                    ]
+
+                    with st.form("pallet_item_category_code_form"):
+                        category_code_input = st.text_input(
+                            "大カテゴリーコード",
+                            value=str(
+                                selected_setting.get("category_code") or ""
+                            ),
+                            placeholder="例：KAG",
+                            help="英数字2～8文字",
+                        )
+                        category_code_submitted = st.form_submit_button(
+                            "大カテゴリーコードを保存",
+                            use_container_width=True,
+                        )
+
+                    if category_code_submitted:
+                        set_pallet_category_code(
+                            conn=conn,
+                            category_id=selected_setting["category_id"],
+                            category_code=category_code_input,
+                            username=username,
+                        )
+                        st.success("大カテゴリーコードを保存しました。")
+                        st.rerun()
+
+                st.divider()
+                st.write("現行登録済み商品の採番プレビュー")
+                existing_preview = (
+                    preview_existing_pallet_item_numbering(conn)
+                )
+
+                if not existing_preview:
+                    st.info("採番対象の商品データはありません。")
+                else:
+                    preview_df = pd.DataFrame(existing_preview)
+                    st.dataframe(
+                        preview_df,
+                        hide_index=True,
+                        use_container_width=True,
+                    )
+                    applicable_count = sum(
+                        row["状態"] in {
+                            "採番対象",
+                            "既存コードを統一",
+                            "変更なし",
+                        }
+                        for row in existing_preview
+                    )
+                    problem_count = len(existing_preview) - applicable_count
+                    st.caption(
+                        f"処理可能：{applicable_count:,}商品 ／ "
+                        f"要確認：{problem_count:,}商品"
+                    )
+
+                    with st.form(
+                        "apply_existing_pallet_item_numbering_form"
+                    ):
+                        apply_confirmed = st.checkbox(
+                            "プレビュー内容を確認し、既存商品へ商品コードを反映する"
+                        )
+                        apply_submitted = st.form_submit_button(
+                            "既存商品の採番を実行",
+                            type="primary",
+                            use_container_width=True,
+                        )
+
+                    if apply_submitted:
+                        if not apply_confirmed:
+                            st.warning("確認にチェックを入れてください。")
+                        else:
+                            result = apply_existing_pallet_item_numbering(
+                                conn,
+                                username=username,
+                            )
+                            st.success(
+                                "既存商品の採番が完了しました。"
+                                f" 対象商品：{result['product_count']:,}件、"
+                                f" 更新データ：{result['updated_rows']:,}件、"
+                                f" 要確認：{result['skipped_count']:,}件"
+                            )
+                            st.rerun()
+
+            except PalletItemNumberingError as exc:
+                st.error(str(exc))
+            except Exception as exc:
+                st.error(
+                    "商品コード管理中にエラーが発生しました："
+                    f"{exc}"
+                )
 
         if st.session_state.simple_admin_flash:
             st.success(st.session_state.simple_admin_flash)
