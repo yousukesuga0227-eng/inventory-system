@@ -430,289 +430,289 @@ with tab_register:
 
         # 登録後は入力フォームを再表示せず、
         # A4のダウンロード／印刷に集中させる。
-        st.stop()
-
-    companies = conn.execute(
-        """
-        SELECT id, code, name
-        FROM companies
-        ORDER BY code, name
-        """
-    ).fetchall()
-    company_map = company_option_map(companies)
-
-    active_categories = list_pallet_categories(
-        conn,
-        include_hidden=False,
-    )
-    category_map = {
-        str(row_value(category, "name", "")): int(
-            row_value(category, "id", 0)
-        )
-        for category in active_categories
-        if str(row_value(category, "name", "")).strip()
-    }
-
-    if not company_map:
-        st.warning("企業マスターに業者が登録されていません。")
-    elif not category_map:
-        st.warning(
-            "大カテゴリーがありません。DB導入スクリプトを確認してください。"
-        )
     else:
-        # 業者と登録済み商品の選択はフォーム外に置く。
-        # これにより、業者を変えた瞬間に商品候補を絞り込める。
-        company_label = st.selectbox(
-            "業者名",
-            options=list(company_map.keys()),
-            key="simple_plan_company",
-        )
-        selected_company = company_map[company_label]
+        # QRタブ白画面修正：A4表示中は登録フォームだけを省略する。
+        companies = conn.execute(
+            """
+            SELECT id, code, name
+            FROM companies
+            ORDER BY code, name
+            """
+        ).fetchall()
+        company_map = company_option_map(companies)
 
-        registered_items = get_items_for_company(
+        active_categories = list_pallet_categories(
             conn,
-            selected_company["id"],
+            include_hidden=False,
         )
-        new_item_option = "＋ 新しい商品を直接入力"
-        registered_item_map = {}
-
-        for item_index, item in enumerate(registered_items, start=1):
-            item_code = str(row_value(item, "code", "") or "").strip()
-            item_name = str(row_value(item, "name", "") or "").strip()
-            category_name = str(
-                row_value(item, "category_name", "未分類") or "未分類"
-            ).strip()
-            code_display = item_code or "コードなし"
-            option_label = (
-                f"{code_display}｜{category_name}｜{item_name}"
+        category_map = {
+            str(row_value(category, "name", "")): int(
+                row_value(category, "id", 0)
             )
+            for category in active_categories
+            if str(row_value(category, "name", "")).strip()
+        }
 
-            # 同名・同コードの履歴が万一残っていても、selectboxの
-            # 選択肢が重複しないようにする。
-            if option_label in registered_item_map:
-                option_label = f"{option_label}（{item_index}）"
-
-            registered_item_map[option_label] = item
-
-        item_options = [new_item_option] + list(
-            registered_item_map.keys()
-        )
-        selected_item_label = st.selectbox(
-            "登録する商品",
-            options=item_options,
-            key=(
-                "simple_plan_registered_item_"
-                f"{selected_company['id']}"
-            ),
-        )
-        selected_registered_item = registered_item_map.get(
-            selected_item_label
-        )
-
-        if registered_items:
-            st.caption(
-                f"この業者の登録済み商品：{len(registered_items):,}件"
+        if not company_map:
+            st.warning("企業マスターに業者が登録されていません。")
+        elif not category_map:
+            st.warning(
+                "大カテゴリーがありません。DB導入スクリプトを確認してください。"
             )
         else:
-            st.info(
-                "この業者には登録済み商品がありません。"
-                "新しい商品を入力してください。"
+            # 業者と登録済み商品の選択はフォーム外に置く。
+            # これにより、業者を変えた瞬間に商品候補を絞り込める。
+            company_label = st.selectbox(
+                "業者名",
+                options=list(company_map.keys()),
+                key="simple_plan_company",
+            )
+            selected_company = company_map[company_label]
+
+            registered_items = get_items_for_company(
+                conn,
+                selected_company["id"],
+            )
+            new_item_option = "＋ 新しい商品を直接入力"
+            registered_item_map = {}
+
+            for item_index, item in enumerate(registered_items, start=1):
+                item_code = str(row_value(item, "code", "") or "").strip()
+                item_name = str(row_value(item, "name", "") or "").strip()
+                category_name = str(
+                    row_value(item, "category_name", "未分類") or "未分類"
+                ).strip()
+                code_display = item_code or "コードなし"
+                option_label = (
+                    f"{code_display}｜{category_name}｜{item_name}"
+                )
+
+                # 同名・同コードの履歴が万一残っていても、selectboxの
+                # 選択肢が重複しないようにする。
+                if option_label in registered_item_map:
+                    option_label = f"{option_label}（{item_index}）"
+
+                registered_item_map[option_label] = item
+
+            item_options = [new_item_option] + list(
+                registered_item_map.keys()
+            )
+            selected_item_label = st.selectbox(
+                "登録する商品",
+                options=item_options,
+                key=(
+                    "simple_plan_registered_item_"
+                    f"{selected_company['id']}"
+                ),
+            )
+            selected_registered_item = registered_item_map.get(
+                selected_item_label
             )
 
-        form_version = st.session_state.simple_plan_form_version
-
-        with st.form(f"simple_receiving_plan_form_{form_version}"):
-            receiving_date_value = st.date_input(
-                "入庫予定日",
-                value=date.today(),
-            )
-            new_category_code_value = ""
-
-            if selected_registered_item is not None:
-                selected_item_id = row_value(
-                    selected_registered_item,
-                    "item_id",
-                    row_value(selected_registered_item, "id"),
-                )
-                selected_project_id = row_value(
-                    selected_registered_item,
-                    "project_id",
-                )
-                selected_category_id = row_value(
-                    selected_registered_item,
-                    "category_id",
-                )
-                selected_category_name = str(
-                    row_value(
-                        selected_registered_item,
-                        "category_name",
-                        "未分類",
-                    )
-                    or "未分類"
-                ).strip()
-                item_code_value = str(
-                    row_value(selected_registered_item, "code", "") or ""
-                ).strip()
-                item_name_value = str(
-                    row_value(selected_registered_item, "name", "") or ""
-                ).strip()
-
-                st.text_input(
-                    "大カテゴリー",
-                    value=selected_category_name,
-                    disabled=True,
-                )
-                item_col1, item_col2 = st.columns(2)
-
-                with item_col1:
-                    st.text_input(
-                        "商品コード",
-                        value=item_code_value,
-                        disabled=True,
-                    )
-
-                with item_col2:
-                    st.text_input(
-                        "商品名",
-                        value=item_name_value,
-                        disabled=True,
-                    )
-
+            if registered_items:
                 st.caption(
-                    "登録済みの商品情報を自動入力しました。"
-                    "変更する場合は「新しい商品を直接入力」を選んでください。"
+                    f"この業者の登録済み商品：{len(registered_items):,}件"
+                )
+            else:
+                st.info(
+                    "この業者には登録済み商品がありません。"
+                    "新しい商品を入力してください。"
                 )
 
-            else:
-                selected_item_id = None
-                selected_project_id = None
-                category_col1, category_col2 = st.columns(2)
+            form_version = st.session_state.simple_plan_form_version
 
-                with category_col1:
-                    category_label = st.selectbox(
+            with st.form(f"simple_receiving_plan_form_{form_version}"):
+                receiving_date_value = st.date_input(
+                    "入庫予定日",
+                    value=date.today(),
+                )
+                new_category_code_value = ""
+
+                if selected_registered_item is not None:
+                    selected_item_id = row_value(
+                        selected_registered_item,
+                        "item_id",
+                        row_value(selected_registered_item, "id"),
+                    )
+                    selected_project_id = row_value(
+                        selected_registered_item,
+                        "project_id",
+                    )
+                    selected_category_id = row_value(
+                        selected_registered_item,
+                        "category_id",
+                    )
+                    selected_category_name = str(
+                        row_value(
+                            selected_registered_item,
+                            "category_name",
+                            "未分類",
+                        )
+                        or "未分類"
+                    ).strip()
+                    item_code_value = str(
+                        row_value(selected_registered_item, "code", "") or ""
+                    ).strip()
+                    item_name_value = str(
+                        row_value(selected_registered_item, "name", "") or ""
+                    ).strip()
+
+                    st.text_input(
                         "大カテゴリー",
-                        options=list(category_map.keys()),
+                        value=selected_category_name,
+                        disabled=True,
+                    )
+                    item_col1, item_col2 = st.columns(2)
+
+                    with item_col1:
+                        st.text_input(
+                            "商品コード",
+                            value=item_code_value,
+                            disabled=True,
+                        )
+
+                    with item_col2:
+                        st.text_input(
+                            "商品名",
+                            value=item_name_value,
+                            disabled=True,
+                        )
+
+                    st.caption(
+                        "登録済みの商品情報を自動入力しました。"
+                        "変更する場合は「新しい商品を直接入力」を選んでください。"
                     )
 
-                with category_col2:
-                    new_category_name = st.text_input(
-                        "新しい大カテゴリー（新規のときだけ）",
-                        value="",
-                    )
-
-                new_category_code_value = st.text_input(
-                    "新しい大カテゴリーコード（新規のときだけ）",
-                    value="",
-                    placeholder="例：KAG",
-                    help="英数字2～8文字。商品コードの2番目に使用します。",
-                )
-
-                item_col1, item_col2 = st.columns(2)
-
-                with item_col1:
-                    item_code_value = st.text_input(
-                        "商品コード（任意）",
-                        value="",
-                    )
-
-                with item_col2:
-                    item_name_value = st.text_input(
-                        "商品名",
-                        value="",
-                    )
-
-                normalized_new_category = str(
-                    new_category_name or ""
-                ).strip()
-
-                if normalized_new_category:
-                    selected_category_id = None
-                    selected_category_name = normalized_new_category
                 else:
-                    selected_category_id = category_map[category_label]
-                    selected_category_name = category_label
+                    selected_item_id = None
+                    selected_project_id = None
+                    category_col1, category_col2 = st.columns(2)
 
-            qty_col1, qty_col2 = st.columns(2)
+                    with category_col1:
+                        category_label = st.selectbox(
+                            "大カテゴリー",
+                            options=list(category_map.keys()),
+                        )
 
-            with qty_col1:
-                pallet_count = st.number_input(
-                    "パレット枚数",
-                    min_value=1,
-                    max_value=1000,
-                    value=1,
-                    step=1,
+                    with category_col2:
+                        new_category_name = st.text_input(
+                            "新しい大カテゴリー（新規のときだけ）",
+                            value="",
+                        )
+
+                    new_category_code_value = st.text_input(
+                        "新しい大カテゴリーコード（新規のときだけ）",
+                        value="",
+                        placeholder="例：KAG",
+                        help="英数字2～8文字。商品コードの2番目に使用します。",
+                    )
+
+                    item_col1, item_col2 = st.columns(2)
+
+                    with item_col1:
+                        item_code_value = st.text_input(
+                            "商品コード（任意）",
+                            value="",
+                        )
+
+                    with item_col2:
+                        item_name_value = st.text_input(
+                            "商品名",
+                            value="",
+                        )
+
+                    normalized_new_category = str(
+                        new_category_name or ""
+                    ).strip()
+
+                    if normalized_new_category:
+                        selected_category_id = None
+                        selected_category_name = normalized_new_category
+                    else:
+                        selected_category_id = category_map[category_label]
+                        selected_category_name = category_label
+
+                qty_col1, qty_col2 = st.columns(2)
+
+                with qty_col1:
+                    pallet_count = st.number_input(
+                        "パレット枚数",
+                        min_value=1,
+                        max_value=1000,
+                        value=1,
+                        step=1,
+                    )
+
+                with qty_col2:
+                    qty_per_pallet = st.number_input(
+                        "1パレットの商品数",
+                        min_value=1,
+                        max_value=1_000_000,
+                        value=1,
+                        step=1,
+                    )
+
+                total_qty = int(pallet_count) * int(qty_per_pallet)
+                st.caption(
+                    f"商品総数：{total_qty:,}個 ／ "
+                    f"A4：{int(pallet_count):,}ページ"
                 )
 
-            with qty_col2:
-                qty_per_pallet = st.number_input(
-                    "1パレットの商品数",
-                    min_value=1,
-                    max_value=1_000_000,
-                    value=1,
-                    step=1,
+                register_submitted = st.form_submit_button(
+                    "登録してA4を作成",
+                    type="primary",
+                    use_container_width=True,
                 )
 
-            total_qty = int(pallet_count) * int(qty_per_pallet)
-            st.caption(
-                f"商品総数：{total_qty:,}個 ／ "
-                f"A4：{int(pallet_count):,}ページ"
-            )
+            if register_submitted:
+                normalized_item_name = str(item_name_value or "").strip()
 
-            register_submitted = st.form_submit_button(
-                "登録してA4を作成",
-                type="primary",
-                use_container_width=True,
-            )
+                if not normalized_item_name:
+                    st.error("商品名を入力してください。")
+                else:
+                    try:
+                        receipt_code = create_receiving_plan(
+                            conn=conn,
+                            receiving_date=receiving_date_value,
+                            company_id=selected_company["id"],
+                            project_id=selected_project_id,
+                            item_id=selected_item_id,
+                            pallet_count=int(pallet_count),
+                            qty_per_pallet=int(qty_per_pallet),
+                            username=username,
+                            item_code=str(item_code_value or "").strip(),
+                            item_name=normalized_item_name,
+                            category_id=selected_category_id,
+                            category_name=selected_category_name,
+                            category_code=new_category_code_value,
+                        )
+                        registered_plan = get_receiving_plan_by_code(
+                            conn,
+                            receipt_code,
+                        )
+                        pdf_data = create_receiving_plan_a4_pdf(
+                            [registered_plan]
+                        )
+                        st.session_state.simple_plan_pdf = pdf_data
+                        st.session_state.simple_plan_pdf_name = (
+                            f"receiving_{receipt_code}.pdf"
+                        )
+                        st.session_state.simple_plan_code = receipt_code
+                        st.session_state.simple_plan_flash = (
+                            "登録できました！ "
+                            f"A4は{int(pallet_count):,}ページです。"
+                        )
+                        st.session_state.simple_plan_form_version += 1
+                        st.rerun()
 
-        if register_submitted:
-            normalized_item_name = str(item_name_value or "").strip()
+                    except PalletError as exc:
+                        st.error(str(exc))
 
-            if not normalized_item_name:
-                st.error("商品名を入力してください。")
-            else:
-                try:
-                    receipt_code = create_receiving_plan(
-                        conn=conn,
-                        receiving_date=receiving_date_value,
-                        company_id=selected_company["id"],
-                        project_id=selected_project_id,
-                        item_id=selected_item_id,
-                        pallet_count=int(pallet_count),
-                        qty_per_pallet=int(qty_per_pallet),
-                        username=username,
-                        item_code=str(item_code_value or "").strip(),
-                        item_name=normalized_item_name,
-                        category_id=selected_category_id,
-                        category_name=selected_category_name,
-                        category_code=new_category_code_value,
-                    )
-                    registered_plan = get_receiving_plan_by_code(
-                        conn,
-                        receipt_code,
-                    )
-                    pdf_data = create_receiving_plan_a4_pdf(
-                        [registered_plan]
-                    )
-                    st.session_state.simple_plan_pdf = pdf_data
-                    st.session_state.simple_plan_pdf_name = (
-                        f"receiving_{receipt_code}.pdf"
-                    )
-                    st.session_state.simple_plan_code = receipt_code
-                    st.session_state.simple_plan_flash = (
-                        "登録できました！ "
-                        f"A4は{int(pallet_count):,}ページです。"
-                    )
-                    st.session_state.simple_plan_form_version += 1
-                    st.rerun()
-
-                except PalletError as exc:
-                    st.error(str(exc))
-
-                except Exception as exc:
-                    st.error(
-                        "登録中にエラーが発生しました："
-                        f"{exc}"
-                    )
+                    except Exception as exc:
+                        st.error(
+                            "登録中にエラーが発生しました："
+                            f"{exc}"
+                        )
 
 
 # ============================================================
