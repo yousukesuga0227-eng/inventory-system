@@ -401,6 +401,7 @@ with tab_register:
         st.session_state.simple_plan_flash = ""
 
     if st.session_state.simple_plan_pdf is not None:
+        st.subheader("登録完了／A4印刷")
         st.download_button(
             "📄 A4管理票を開く・ダウンロード",
             data=st.session_state.simple_plan_pdf,
@@ -413,6 +414,23 @@ with tab_register:
             "PDFを開いて Ctrl＋P で印刷してください。 "
             f"入庫管理番号：{st.session_state.simple_plan_code}"
         )
+        st.info(
+            "A4は登録したパレット枚数と同じページ数です。"
+            "1パレットにつき1ページを印刷してください。"
+        )
+
+        if st.button(
+            "次の商品を登録する",
+            use_container_width=True,
+        ):
+            st.session_state.simple_plan_pdf = None
+            st.session_state.simple_plan_pdf_name = ""
+            st.session_state.simple_plan_code = ""
+            st.rerun()
+
+        # 登録後は入力フォームを再表示せず、
+        # A4のダウンロード／印刷に集中させる。
+        st.stop()
 
     companies = conn.execute(
         """
