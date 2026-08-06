@@ -139,54 +139,320 @@ def _build_payload_for_manual_code(
 
 
 # ============================================================
-# 案件・荷主選択
+# 案件・商品を一本道で登録
 # ============================================================
-projects = conn.execute(
-    """
-    SELECT
-        p.id,
-        p.code,
-        p.name,
-        c.code AS company_code,
-        c.name AS company_name
-    FROM projects p
-    LEFT JOIN project_companies pc
-        ON p.id = pc.project_id
-    LEFT JOIN companies c
-        ON pc.company_id = c.id
-    WHERE COALESCE(p.is_hidden, FALSE) = FALSE
-    ORDER BY c.code, p.name
-    """
-).fetchall()
+st.subheader("1．案件を選ぶ・登録する")
+st.caption("既存案件を選ぶか、この画面内で新しい案件を登録してください。登録後はその案件が自動選択されます。")
 
-project_options = {
-    (
+
+def _load_companies(search_text=""):
+    rows = conn.execute(
+        """
+        SELECT id, code, name
+        FROM companies
+        WHERE COALESCE(is_active, TRUE) = TRUE
+          AND (? = '' OR code ILIKE ? OR name ILIKE ?)
+        ORDER BY code
+        LIMIT 100
+        """,
+        (search_text, f"%{search_text}%", f"%{search_text}%"),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def _load_projects():
+    return conn.execute(
+        """
+        SELECT
+            p.id, p.code, p.name, p.receive_date, p.shipping_date,
+            p.status, p.memo,
+            c.id AS company_id, c.code AS company_code, c.name AS company_name
+        FROM projects p
+        LEFT JOIN project_companies pc ON p.id = pc.project_id
+        LEFT JOIN companies c ON pc.company_id = c.id
+        WHERE COALESCE(p.is_hidden, FALSE) = FALSE
+        ORDER BY c.code, p.name
+        """
+    ).fetchall()
+
+
+def _project_label(project):
+    return (
         f"{_row_value(project, 'company_code', '荷主未設定')}："
-        f"{_row_value(project, 'name', '')}"
-    ): int(project["id"])
-    for project in projects
-}
+        f"{_row_value(project, 'code', '')} / {_row_value(project, 'name', '')}"
+    )
 
-if not project_options:
-    st.warning("先に案件を登録してください。")
+
+def _project_index(project_rows, selected_id):
+    if not project_rows:
+        return 0
+    ids = [int(row["id"]) for row in project_rows]
+    try:
+        return ids.index(int(selected_id))
+    except (ValueError, TypeError):
+        return 0
+
+
+def _date_text(value):
+    return "" if value is None else str(value)
+
+
+PROJECT_STATUS_OPTIONS = ["未着荷", "入庫済", "出荷待ち", "出荷済", "完了"]
+
+if "selected_project_id" not in st.session_state:
+    st.session_state.selected_project_id = None
+
+project_tab, project_create_tab = st.tabs(["既存案件から選択", "＋ 新しい案件を登録"])
+projects = _load_projects()
+project_id = None
+
+with project_create_tab:
+    st.write("#### 新しい案件を登録")
+    company_search = st.text_input("企業検索（企業コード・企業名）", key="integrated_project_company_search")
+    companies = _load_companies(company_search)
+    company_options = {f"{row['code']}：{row['name']}": int(row["id"]) for row in companies}
+
+    selected_company_id = None
+    if company_options:
+        selected_company_label = st.selectbox("企業", list(company_options.keys()), key="integrated_new_project_company")
+        selected_company_id = company_options[selected_company_label]
+    else:
+        st.warning("該当する企業がありません。先に企業管理で登録してください。")
+
+    new_col1, new_col2 = st.columns(2)
+    with new_col1:
+        new_project_code = st.text_input("案件コード", key="integrated_new_project_code")
+        receive_unknown = st.checkbox("入庫予定日を未定にする", key="integrated_new_receive_unknown")
+        if receive_unknown:
+            new_receive_date = "未定"
+            st.info("入庫予定日は「未定」で登録されます。")
+        else:
+            new_receive_date = st.date_input("入庫予定日", key="integrated_new_receive_date").strftime("%Y-%m-%d")
+
+    with new_col2:
+        new_project_name = st.text_input("案件名", key="integrated_new_project_name")
+        shipping_unknown = st.checkbox("出荷予定日を未定にする", key="integrated_new_shipping_unknown")
+        if shipping_unknown:
+            new_shipping_date = "未定"
+            st.info("出荷予定日は「未定」で登録されます。")
+        else:
+            new_shipping_date = st.date_input("出荷予定日", key="integrated_new_shipping_date").strftime("%Y-%m-%d")
+
+    new_project_status = st.selectbox("案件状態", PROJECT_STATUS_OPTIONS, key="integrated_new_project_status")
+    new_project_memo = st.text_area("備考", key="integrated_new_project_memo")
+
+    if st.button("💾 案件を登録して商品入力へ進む", type="primary", use_container_width=True, key="integrated_create_project"):
+        code_value = new_project_code.strip()
+        name_value = new_project_name.strip()
+        if selected_company_id is None:
+            st.warning("企業を選択してください。")
+        elif not code_value or not name_value:
+            st.warning("案件コードと案件名を入力してください。")
+        else:
+            duplicate = conn.execute("SELECT id FROM projects WHERE code = ? LIMIT 1", (code_value,)).fetchone()
+            if duplicate is not None:
+                st.error("同じ案件コードがすでに登録されています。")
+            else:
+                try:
+                    new_project_row = conn.execute(
+                        """
+                        INSERT INTO projects (
+                            code, name, receive_date, shipping_date, status, memo, created_at
+                        )
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                        RETURNING id
+                        """,
+                        (
+                            code_value, name_value, new_receive_date, new_shipping_date,
+                            new_project_status, new_project_memo.strip(),
+                            datetime.now(JST).strftime("%Y-%m-%d %H:%M:%S"),
+                        ),
+                    ).fetchone()
+                    try:
+                        new_project_id = int(new_project_row["id"])
+                    except (KeyError, IndexError, TypeError):
+                        new_project_id = int(new_project_row[0])
+                    conn.execute(
+                        """
+                        INSERT INTO project_companies (project_id, company_id)
+                        VALUES (?, ?)
+                        ON CONFLICT (project_id)
+                        DO UPDATE SET company_id = EXCLUDED.company_id
+                        """,
+                        (new_project_id, selected_company_id),
+                    )
+                    conn.commit()
+                except Exception as exc:
+                    conn.rollback()
+                    st.error(f"案件登録に失敗しました：{exc}")
+                else:
+                    log_action(
+                        st.session_state.username, "案件登録", "projects",
+                        new_project_id, name_value, f"案件コード: {code_value}",
+                    )
+                    st.session_state.selected_project_id = new_project_id
+                    st.success("案件を登録しました。商品入力へ進みます。")
+                    st.rerun()
+
+with project_tab:
+    if not projects:
+        st.info("登録済み案件がありません。右のタブから新しい案件を登録してください。")
+    else:
+        project_labels = [_project_label(row) for row in projects]
+        selected_index = _project_index(projects, st.session_state.selected_project_id)
+        selected_project_label = st.selectbox(
+            "案件選択", project_labels, index=selected_index, key="integrated_project_selector"
+        )
+        selected_project_row = projects[project_labels.index(selected_project_label)]
+        project_id = int(selected_project_row["id"])
+        st.session_state.selected_project_id = project_id
+        st.caption(
+            f"荷主：{_row_value(selected_project_row, 'company_code', '未設定')} / "
+            f"{_row_value(selected_project_row, 'company_name', '')}"
+        )
+
+        with st.expander("✏️ 選択中の案件を編集", expanded=False):
+            edit_company_search = st.text_input("企業検索", key=f"edit_company_search_{project_id}")
+            edit_companies = _load_companies(edit_company_search)
+            edit_company_options = {f"{row['code']}：{row['name']}": int(row["id"]) for row in edit_companies}
+            current_company_id = _row_value(selected_project_row, "company_id", None)
+            edit_company_labels = list(edit_company_options.keys())
+            edit_company_index = 0
+            if current_company_id is not None:
+                for index, label in enumerate(edit_company_labels):
+                    if edit_company_options[label] == int(current_company_id):
+                        edit_company_index = index
+                        break
+
+            edited_company_id = current_company_id
+            if edit_company_labels:
+                edited_company_label = st.selectbox(
+                    "企業", edit_company_labels, index=edit_company_index, key=f"edit_company_{project_id}"
+                )
+                edited_company_id = edit_company_options[edited_company_label]
+
+            edit_col1, edit_col2 = st.columns(2)
+            with edit_col1:
+                edited_project_code = st.text_input(
+                    "案件コード", value=str(_row_value(selected_project_row, "code", "")),
+                    key=f"edit_project_code_{project_id}",
+                )
+                current_receive = _date_text(_row_value(selected_project_row, "receive_date", ""))
+                edited_receive_unknown = st.checkbox(
+                    "入庫予定日を未定にする", value=current_receive == "未定",
+                    key=f"edit_receive_unknown_{project_id}",
+                )
+                if edited_receive_unknown:
+                    edited_receive_date = "未定"
+                else:
+                    receive_default = datetime.now(JST).date()
+                    if current_receive and current_receive != "未定":
+                        try:
+                            receive_default = datetime.strptime(current_receive[:10], "%Y-%m-%d").date()
+                        except ValueError:
+                            pass
+                    edited_receive_date = st.date_input(
+                        "入庫予定日", value=receive_default, key=f"edit_receive_date_{project_id}"
+                    ).strftime("%Y-%m-%d")
+
+            with edit_col2:
+                edited_project_name = st.text_input(
+                    "案件名", value=str(_row_value(selected_project_row, "name", "")),
+                    key=f"edit_project_name_{project_id}",
+                )
+                current_shipping = _date_text(_row_value(selected_project_row, "shipping_date", ""))
+                edited_shipping_unknown = st.checkbox(
+                    "出荷予定日を未定にする", value=current_shipping == "未定",
+                    key=f"edit_shipping_unknown_{project_id}",
+                )
+                if edited_shipping_unknown:
+                    edited_shipping_date = "未定"
+                else:
+                    shipping_default = datetime.now(JST).date()
+                    if current_shipping and current_shipping != "未定":
+                        try:
+                            shipping_default = datetime.strptime(current_shipping[:10], "%Y-%m-%d").date()
+                        except ValueError:
+                            pass
+                    edited_shipping_date = st.date_input(
+                        "出荷予定日", value=shipping_default, key=f"edit_shipping_date_{project_id}"
+                    ).strftime("%Y-%m-%d")
+
+            current_status = str(_row_value(selected_project_row, "status", "未着荷"))
+            status_index = PROJECT_STATUS_OPTIONS.index(current_status) if current_status in PROJECT_STATUS_OPTIONS else 0
+            edited_project_status = st.selectbox(
+                "案件状態", PROJECT_STATUS_OPTIONS, index=status_index,
+                key=f"edit_project_status_{project_id}",
+            )
+            edited_project_memo = st.text_area(
+                "備考", value=str(_row_value(selected_project_row, "memo", "")),
+                key=f"edit_project_memo_{project_id}",
+            )
+
+            if st.button("案件の変更を保存", use_container_width=True, key=f"save_project_edit_{project_id}"):
+                code_value = edited_project_code.strip()
+                name_value = edited_project_name.strip()
+                if edited_company_id is None:
+                    st.warning("企業を選択してください。")
+                elif not code_value or not name_value:
+                    st.warning("案件コードと案件名を入力してください。")
+                else:
+                    duplicate = conn.execute(
+                        "SELECT id FROM projects WHERE code = ? AND id <> ? LIMIT 1",
+                        (code_value, project_id),
+                    ).fetchone()
+                    if duplicate is not None:
+                        st.error("同じ案件コードが別の案件で使用されています。")
+                    else:
+                        try:
+                            conn.execute(
+                                """
+                                UPDATE projects
+                                SET code = ?, name = ?, receive_date = ?, shipping_date = ?, status = ?, memo = ?
+                                WHERE id = ?
+                                """,
+                                (
+                                    code_value, name_value, edited_receive_date, edited_shipping_date,
+                                    edited_project_status, edited_project_memo.strip(), project_id,
+                                ),
+                            )
+                            conn.execute(
+                                """
+                                INSERT INTO project_companies (project_id, company_id)
+                                VALUES (?, ?)
+                                ON CONFLICT (project_id)
+                                DO UPDATE SET company_id = EXCLUDED.company_id
+                                """,
+                                (project_id, edited_company_id),
+                            )
+                            conn.commit()
+                        except Exception as exc:
+                            conn.rollback()
+                            st.error(f"案件更新に失敗しました：{exc}")
+                        else:
+                            log_action(
+                                st.session_state.username, "案件更新", "projects",
+                                project_id, name_value, f"案件コード: {code_value}",
+                            )
+                            st.success("案件情報を更新しました。")
+                            st.rerun()
+
+if project_id is None:
+    st.info("商品を登録する案件を選択、または新規登録してください。")
     st.stop()
-
-selected_project = st.selectbox(
-    "案件選択",
-    list(project_options.keys()),
-)
-project_id = project_options[selected_project]
 
 try:
     project_company = get_project_company(conn, project_id)
 except ItemCodeError as exc:
     st.error(str(exc))
-    st.info("企業管理と案件管理で、案件に荷主コードを設定してください。")
+    st.info("この画面の案件編集から、案件に企業を設定してください。")
     st.stop()
 
+st.divider()
+st.subheader("2．大カテゴリーと商品を登録")
 st.caption(
-    f"荷主：{project_company['company_code']} / "
-    f"{project_company.get('company_name', '')}"
+    f"選択中：{project_company.get('project_code', '')} / "
+    f"{project_company.get('project_name', '')}"
 )
 
 
