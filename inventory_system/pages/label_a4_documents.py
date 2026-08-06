@@ -187,24 +187,23 @@ def _draw_labeled_value(
     pdf.drawString(value_x, baseline_y - (1 * mm), value)
 
 
-def _draw_barcode(pdf, value, x, y, width, height):
+def _draw_qr_code(pdf, value, x, y, size):
     value = str(value or "").strip()
     if not value:
         return
 
-    barcode = createBarcodeDrawing(
-        "Code128",
+    qr_code = createBarcodeDrawing(
+        "QR",
         value=value,
-        barHeight=height,
-        humanReadable=False,
+        width=size,
+        height=size,
+        barBorder=4,
+        barLevel="M",
     )
-    barcode_width = float(barcode.width)
-    scale = min(1.0, width / barcode_width)
 
     pdf.saveState()
-    pdf.translate(x + ((width - (barcode_width * scale)) / 2), y)
-    pdf.scale(scale, 1)
-    renderPDF.draw(barcode, pdf, 0, 0)
+    pdf.translate(x, y)
+    renderPDF.draw(qr_code, pdf, 0, 0)
     pdf.restoreState()
 
 
@@ -254,7 +253,8 @@ def create_shipping_a4_pdf(items):
         left_value_x = inner_x + (29 * mm)
         left_value_width = right_box_x - left_value_x - (8 * mm)
 
-        pdf.setLineWidth(1.4)
+        # A4で印刷したときも枠と区切りがはっきり見える太さにする。
+        pdf.setLineWidth(2.4)
         pdf.rect(
             margin,
             margin,
@@ -310,7 +310,7 @@ def create_shipping_a4_pdf(items):
             item_name,
             left_value_width,
             25,
-            max_lines=2,
+            max_lines=3,
         )
         pdf.setFont(FONT_NAME, 25)
 
@@ -334,7 +334,7 @@ def create_shipping_a4_pdf(items):
         pdf.setFont(FONT_NAME, 14)
         pdf.drawString(
             inner_x + (7 * mm),
-            quantity_box_top - (10 * mm),
+            quantity_box_top - (8 * mm),
             "出荷数",
         )
         quantity_text = f"{required_quantity:,}"
@@ -347,13 +347,13 @@ def create_shipping_a4_pdf(items):
         pdf.setFont(FONT_NAME, quantity_font_size)
         pdf.drawCentredString(
             inner_x + (quantity_box_width / 2),
-            quantity_box_y + (8 * mm),
+            quantity_box_y + (16 * mm),
             quantity_text,
         )
         pdf.setFont(FONT_NAME, 17)
         pdf.drawRightString(
             inner_x + quantity_box_width - (9 * mm),
-            quantity_box_y + (10 * mm),
+            quantity_box_y + (18 * mm),
             "個",
         )
 
@@ -400,13 +400,13 @@ def create_shipping_a4_pdf(items):
                 displayed_project_code,
             )
 
-        _draw_barcode(
+        qr_size = 48 * mm
+        _draw_qr_code(
             pdf,
             item_code,
-            right_box_x + (6 * mm),
-            margin + (45 * mm),
-            right_box_width - (12 * mm),
-            27 * mm,
+            right_box_x + ((right_box_width - qr_size) / 2),
+            margin + (40 * mm),
+            qr_size,
         )
         caption_font_size = _fit_font_size(
             item_code,
@@ -415,7 +415,7 @@ def create_shipping_a4_pdf(items):
             min_size=8,
         )
         displayed_caption = _truncate_text(
-            item_code or "バーコードなし",
+            item_code or "QRコードなし",
             right_box_width - (12 * mm),
             caption_font_size,
         )
