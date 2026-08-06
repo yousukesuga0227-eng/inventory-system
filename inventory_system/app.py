@@ -375,7 +375,6 @@ def home_page():
                     "label": "🔍 商品検索"
                 },
                 {
-                    "page": "pages/08_shipping_instruction.py",
                     "label": "📄 出荷指示書"
                 },
                 {
@@ -446,7 +445,6 @@ pages = [
     st.Page("pages/03_stock.py", title="入出庫登録", icon="📥"),
     st.Page("pages/04_stock_list.py", title="在庫一覧", icon="📊"),
     st.Page("pages/07_item_search.py", title="商品検索", icon="🔍"),
-    st.Page("pages/08_shipping_instruction.py", title="出荷指示書", icon="📄"),
     st.Page("pages/ラベル出力.py", title="ラベル出力", icon="🏷️"),
     st.Page(
     "pages/13_pallet_inventory.py",
