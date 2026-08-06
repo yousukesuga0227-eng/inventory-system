@@ -24,6 +24,7 @@ from brother_ql.backends.helpers import send
 
 from database import get_connection
 from barcode_serials import MAX_UNIT_NUMBER, make_unit_barcode
+from pages.label_a4_documents import create_shipping_a4_pdf
 
 
 st.set_page_config(
@@ -33,7 +34,7 @@ st.set_page_config(
 )
 
 st.title("🏷️ ラベル出力")
-st.caption("SHARK側で完成済みラベルPDF/PNGを作成し、QL-820へ直接印刷します。")
+st.caption("案件を選択し、通常ラベルまたはA4出荷商品票をまとめて作成します。")
 
 
 # =========================
@@ -253,38 +254,6 @@ QL820_MODEL = "QL-820NWB"
 DEFAULT_QL820_LABEL_SIZE = "62"
 DEFAULT_QL820_RED = False
 DEFAULT_QL820_CUT = True
-
-
-# =========================
-# サイドバー設定
-# =========================
-st.sidebar.header("🖨️ QL-820 印刷設定")
-
-ql820_ip = st.sidebar.text_input(
-    "QL-820 IPアドレス",
-    value=DEFAULT_QL820_IP
-)
-
-ql820_label_size = st.sidebar.selectbox(
-    "ロール種類",
-    options=[
-        "62",
-    ],
-    index=0
-)
-
-ql820_red = False
-
-st.sidebar.caption("用紙：DK-2205 白テープ / 黒印字")
-
-ql820_cut = st.sidebar.checkbox(
-    "印刷後にカット",
-    value=DEFAULT_QL820_CUT
-)
-
-st.sidebar.caption(
-    "今回のテストロールは 62 / 赤黒OFF / カットON で成功。"
-)
 
 
 # =========================
@@ -743,6 +712,43 @@ try:
 
     selected_project_id = project_options[selected_project_label]
 
+    output_type = st.radio(
+        "印刷形式",
+        [
+            "ラベルプリント",
+            "A4プリント",
+        ],
+        horizontal=True,
+    )
+
+    ql820_ip = DEFAULT_QL820_IP
+    ql820_label_size = DEFAULT_QL820_LABEL_SIZE
+    ql820_red = DEFAULT_QL820_RED
+    ql820_cut = DEFAULT_QL820_CUT
+
+    if output_type == "ラベルプリント":
+        st.sidebar.header("🖨️ QL-820 印刷設定")
+
+        ql820_ip = st.sidebar.text_input(
+            "QL-820 IPアドレス",
+            value=DEFAULT_QL820_IP,
+        )
+        ql820_label_size = st.sidebar.selectbox(
+            "ロール種類",
+            options=["62"],
+            index=0,
+        )
+        ql820_cut = st.sidebar.checkbox(
+            "印刷後にカット",
+            value=DEFAULT_QL820_CUT,
+        )
+        st.sidebar.caption("用紙：DK-2205 白テープ / 黒印字")
+        st.sidebar.caption(
+            "今回のテストロールは 62 / 赤黒OFF / カットON で成功。"
+        )
+    else:
+        st.sidebar.info("A4プリントはPDFを開き、A4用プリンターから印刷します。")
+
     ph = placeholder(conn)
 
     items = fetch_all(
@@ -801,7 +807,11 @@ item_labels = {
 }
 
 selected_item_labels = st.multiselect(
-    "ラベル出力する商品を選択",
+    (
+        "ラベル出力する商品を選択"
+        if output_type == "ラベルプリント"
+        else "A4出力する商品を選択"
+    ),
     list(item_labels.keys()),
     default=list(item_labels.keys())
 )
@@ -812,6 +822,48 @@ selected_items = [
 ]
 
 st.write(f"選択中：{len(selected_items)} 件")
+
+
+# =========================
+# A4プリント
+# =========================
+if output_type == "A4プリント":
+    st.info(
+        f"出力予定：A4横向き {len(selected_items)}ページ / "
+        "1商品につき必ず1ページです。"
+    )
+
+    with st.expander("A4出力内容の確認", expanded=True):
+        for item in selected_items:
+            required_quantity = int(
+                item.get("required_quantity") or 0
+            )
+            st.write(
+                f"・{item.get('item_name', '')} / "
+                f"{item.get('item_code', '')} / "
+                f"出荷数 {required_quantity:,}個"
+            )
+
+    if not selected_items:
+        st.warning("商品を1件以上選択してください。")
+        st.stop()
+
+    a4_pdf_bytes = create_shipping_a4_pdf(selected_items)
+    now = datetime.now().strftime("%Y%m%d_%H%M%S")
+    project_code = safe_filename(
+        selected_items[0].get("project_code") or "project"
+    )
+
+    st.download_button(
+        label="📄 A4出荷商品票をまとめてダウンロード",
+        data=a4_pdf_bytes,
+        file_name=f"shark_a4_{project_code}_{now}.pdf",
+        mime="application/pdf",
+        type="primary",
+        use_container_width=True,
+    )
+    st.caption("ダウンロードしたPDFを開き、A4・横向きで印刷してください。")
+    st.stop()
 
 print_mode = st.radio(
     "印刷枚数の指定方法",
