@@ -122,13 +122,16 @@ def create_project_document(title, project, company, items, include_barcode):
     )
 
     styles = getSampleStyleSheet()
+    # SHARK document header redesign 20260808
     title_style = ParagraphStyle(
         "SharkTitle",
         parent=styles["Title"],
         fontName=PDF_FONT,
-        fontSize=18,
-        leading=20,
-        spaceAfter=2 * mm,
+        fontSize=20,
+        leading=22,
+        alignment=1,
+        textColor=colors.HexColor("#222222"),
+        spaceAfter=0,
     )
     body_style = ParagraphStyle(
         "SharkBody",
@@ -145,26 +148,51 @@ def create_project_document(title, project, company, items, include_barcode):
         if page_index > 0:
             elements.append(PageBreak())
 
-        header_cells = []
+        # 左：ロゴ / 中央：帳票タイトル / 右：余白
+        # 左右を同幅にすることでタイトルを用紙の真ん中に配置する。
         if os.path.exists(LOGO_PATH):
-            header_cells.append(
-                Image(LOGO_PATH, width=46 * mm, height=11 * mm)
-            )
-        else:
-            header_cells.append(Paragraph("SHARK", title_style))
+            logo = Image(LOGO_PATH)
 
-        header_cells.append(Paragraph(title, title_style))
-        header = Table([header_cells], colWidths=[55 * mm, 222 * mm])
+            # 元画像の縦横比を維持しながら、指定枠内に縮小する。
+            max_logo_width = 38 * mm
+            max_logo_height = 10 * mm
+            scale = min(
+                max_logo_width / float(logo.imageWidth),
+                max_logo_height / float(logo.imageHeight),
+                1.0,
+            )
+            logo.drawWidth = float(logo.imageWidth) * scale
+            logo.drawHeight = float(logo.imageHeight) * scale
+            logo_cell = logo
+        else:
+            logo_cell = Paragraph("SHARK", body_style)
+
+        document_title = Paragraph(
+            f"【{safe_text(title)}】",
+            title_style,
+        )
+
+        header = Table(
+            [[logo_cell, document_title, ""]],
+            colWidths=[55 * mm, 167 * mm, 55 * mm],
+            rowHeights=[14 * mm],
+        )
         header.setStyle(
             TableStyle(
                 [
                     ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-                    ("ALIGN", (1, 0), (1, 0), "RIGHT"),
+                    ("ALIGN", (0, 0), (0, 0), "LEFT"),
+                    ("ALIGN", (1, 0), (1, 0), "CENTER"),
+                    ("LEFTPADDING", (0, 0), (-1, -1), 1),
+                    ("RIGHTPADDING", (0, 0), (-1, -1), 1),
+                    ("TOPPADDING", (0, 0), (-1, -1), 0),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 1),
+                    ("LINEBELOW", (0, 0), (-1, -1), 0.7, colors.HexColor("#666666")),
                 ]
             )
         )
         elements.append(header)
-        elements.append(Spacer(1, 1.5 * mm))
+        elements.append(Spacer(1, 2 * mm))
 
         info_data = [
             [
