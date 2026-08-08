@@ -901,6 +901,22 @@ elif sort_option == "商品コード順":
 elif sort_option == "商品名順":
     order_by = "items.name"
 
+# FIX: project_options / selected_project compatibility
+# 商品管理の簡素化後も、ラベルCSV出力とCSV登録ログで使う案件ラベルを用意する
+project_options = {
+    (
+        f"{_row_value(row, 'company_code', '荷主未設定')}："
+        f"{_row_value(row, 'name', '')}"
+    ): int(row["id"])
+    for row in projects
+}
+
+selected_project = (
+    f"{project_company.get('company_code', '荷主未設定')}："
+    f"{project_company.get('project_name', '')}"
+)
+
+
 st.subheader("シール印刷用CSV出力")
 label_project = st.selectbox(
     "CSV出力する案件",
@@ -1078,5 +1094,110 @@ st.dataframe(
     use_container_width=True,
     hide_index=True,
 )
+
+
+# ============================================================
+# 商品登録の取り消し（論理削除）
+# ============================================================
+st.divider()
+st.subheader("商品登録の取り消し")
+st.caption(
+    "誤登録した商品を取り消します。データ自体は削除せず無効化するため、"
+    "商品コードの採番履歴と操作ログは残ります。"
+)
+
+if not item_list:
+    st.info("取り消しできる有効な商品がありません。")
+else:
+    cancel_options = {}
+    for item in item_list:
+        cancel_label = (
+            f"{item['企業コード']} / {item['案件名']} / "
+            f"{item['商品コード']} / {item['商品名']}"
+        )
+        cancel_options[cancel_label] = int(item["ID"])
+
+    selected_cancel_label = st.selectbox(
+        "取り消す商品",
+        list(cancel_options.keys()),
+        key="cancel_registered_item_select",
+    )
+    selected_cancel_id = cancel_options[selected_cancel_label]
+    selected_cancel_item = next(
+        item for item in item_list if int(item["ID"]) == selected_cancel_id
+    )
+
+    st.warning(
+        "取り消すと、この商品は通常の商品一覧・ラベル出力・入出庫の選択対象から外れます。"
+        " 過去データは削除しません。"
+    )
+
+    cancel_confirmed = st.checkbox(
+        (
+            f"{selected_cancel_item['商品コード']} / "
+            f"{selected_cancel_item['商品名']} を取り消す"
+        ),
+        key=f"cancel_registered_item_confirm_{selected_cancel_id}",
+    )
+
+    if st.button(
+        "🗑️ 商品登録を取り消す",
+        use_container_width=True,
+        disabled=not cancel_confirmed,
+        key=f"cancel_registered_item_button_{selected_cancel_id}",
+    ):
+        try:
+            current_item = conn.execute(
+                '''
+                SELECT id, code, name, project_id
+                FROM items
+                WHERE id = ?
+                  AND COALESCE(is_active, TRUE) = TRUE
+                LIMIT 1
+                ''',
+                (selected_cancel_id,),
+            ).fetchone()
+
+            if current_item is None:
+                st.info("この商品はすでに取り消されています。")
+            else:
+                conn.execute(
+                    '''
+                    UPDATE items
+                    SET is_active = FALSE
+                    WHERE id = ?
+                    ''',
+                    (selected_cancel_id,),
+                )
+                conn.commit()
+
+                log_action(
+                    st.session_state.username,
+                    "商品登録取消",
+                    "items",
+                    selected_cancel_id,
+                    selected_cancel_item["商品名"],
+                    (
+                        f"商品コード: {selected_cancel_item['商品コード']} / "
+                        f"案件: {selected_cancel_item['案件名']} / 論理削除"
+                    ),
+                )
+
+                st.success(
+                    f"商品登録を取り消しました："
+                    f"{selected_cancel_item['商品コード']} / "
+                    f"{selected_cancel_item['商品名']}"
+                )
+                st.rerun()
+        except Exception as exc:
+            try:
+                if hasattr(conn, "rollback"):
+                    conn.rollback()
+                elif hasattr(conn, "conn"):
+                    conn.conn.rollback()
+            except Exception:
+                pass
+            st.error(f"商品取り消しに失敗しました：{exc}")
+
 
 conn.close()
