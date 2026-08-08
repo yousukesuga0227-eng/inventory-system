@@ -449,6 +449,7 @@ with col1:
             False
         )
 
+# FIX: SHARK BLACK BOX scope 20260808
 if st.session_state.get("show_black_box", False):
 
     st.subheader("🕶 SHARK BLACK BOX")
@@ -465,17 +466,24 @@ if st.session_state.get("show_black_box", False):
 
     data = []
 
-for log in logs:
+    for log in logs:
+        dt = log["login_at"]
 
-    dt = log["login_at"]
+        if isinstance(dt, datetime):
+            dt = dt + timedelta(hours=9)
+            dt = dt.strftime("%Y/%m/%d %H:%M:%S")
 
-    # datetime型なら
-    if isinstance(dt, datetime):
-        dt = dt + timedelta(hours=9)
-        dt = dt.strftime("%Y/%m/%d %H:%M:%S")
+        data.append({
+            "ユーザーID": log["username"],
+            "権限": log["role"],
+            "ログイン日時": dt,
+        })
 
-    data.append({
-        "ユーザーID": log["username"],
-        "権限": log["role"],
-        "ログイン日時": dt,
-    })
+    if data:
+        st.dataframe(
+            data,
+            use_container_width=True,
+            hide_index=True,
+        )
+    else:
+        st.info("ログイン履歴はまだありません。")
