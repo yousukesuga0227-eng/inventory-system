@@ -370,7 +370,7 @@ st.caption(
 
 
 # ============================================================
-# 大カテゴリー管理
+# 大カテゴリー追加・選択
 # ============================================================
 
 active_categories = list_item_categories(
@@ -379,9 +379,84 @@ active_categories = list_item_categories(
     include_inactive=False,
 )
 
+with st.expander(
+    "➕ 大カテゴリーを追加",
+    expanded=not bool(active_categories),
+):
+    st.caption(
+        "この荷主でまだ登録されていない大カテゴリーを追加できます。"
+        "既存カテゴリーの変更・無効化は管理者メニューから行います。"
+    )
+
+    category_add_col1, category_add_col2 = st.columns([1, 2])
+
+    with category_add_col1:
+        new_category_code = st.text_input(
+            "カテゴリーコード",
+            placeholder="例：KAG",
+            key=f"field_new_category_code_{project_company['company_id']}",
+        )
+
+    with category_add_col2:
+        new_category_name = st.text_input(
+            "大カテゴリー名",
+            placeholder="例：家具",
+            key=f"field_new_category_name_{project_company['company_id']}",
+        )
+
+    if st.button(
+        "💾 大カテゴリーを追加",
+        type="primary",
+        use_container_width=True,
+        key=f"field_add_category_{project_company['company_id']}",
+    ):
+        try:
+            existing_category = get_item_category_by_code(
+                conn,
+                project_company["company_id"],
+                new_category_code,
+                include_inactive=True,
+            )
+
+            if existing_category:
+                st.warning(
+                    "このカテゴリーコードは既に登録されています。"
+                    "名称変更や有効化は管理者メニューから行ってください。"
+                )
+            else:
+                saved_category = upsert_item_category(
+                    conn,
+                    project_company["company_id"],
+                    new_category_code,
+                    new_category_name,
+                    True,
+                )
+
+                log_action(
+                    st.session_state.username,
+                    "大カテゴリー追加",
+                    "item_code_categories",
+                    saved_category.get("id"),
+                    saved_category.get("category_name"),
+                    (
+                        f"企業ID: {project_company['company_id']} / "
+                        f"カテゴリーコード: {saved_category['category_code']}"
+                    ),
+                )
+
+                st.success(
+                    f"大カテゴリーを追加しました："
+                    f"{saved_category['category_code']} / "
+                    f"{saved_category['category_name']}"
+                )
+                st.rerun()
+
+        except ItemCodeError as exc:
+            st.error(str(exc))
+
 if not active_categories:
     st.warning(
-        "登録済みの大カテゴリーがありません。管理者へ登録を依頼してください。"
+        "大カテゴリーがまだありません。上の「➕ 大カテゴリーを追加」から登録してください。"
     )
     st.stop()
 
