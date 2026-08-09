@@ -29,6 +29,22 @@ check_admin()
 conn = get_connection()
 ensure_item_code_schema(conn)
 
+
+def _ensure_company_contact_column():
+    if is_postgres(conn):
+        conn.execute(
+            "ALTER TABLE companies ADD COLUMN IF NOT EXISTS contact_person TEXT"
+        )
+    else:
+        columns = conn.execute("PRAGMA table_info(companies)").fetchall()
+        column_names = {row["name"] for row in columns}
+        if "contact_person" not in column_names:
+            conn.execute("ALTER TABLE companies ADD COLUMN contact_person TEXT")
+    conn.commit()
+
+
+_ensure_company_contact_column()
+
 st.title("商品管理")
 st.success(
     f"ログイン中：{st.session_state.get('display_name', st.session_state.username)}"
@@ -146,16 +162,27 @@ st.caption("既存案件を選ぶか、この画面内で新しい案件を登�
 
 
 def _load_companies(search_text=""):
+    search_text = search_text.strip()
+    like_text = f"%{search_text}%"
+
     rows = conn.execute(
         """
-        SELECT id, code, name
+        SELECT
+            id,
+            code,
+            name,
+            COALESCE(contact_person, '') AS contact_person
         FROM companies
         WHERE COALESCE(is_active, TRUE) = TRUE
-          AND (? = '' OR code ILIKE ? OR name ILIKE ?)
+          AND (
+              ? = ''
+              OR LOWER(code) LIKE LOWER(?)
+              OR LOWER(name) LIKE LOWER(?)
+              OR LOWER(COALESCE(contact_person, '')) LIKE LOWER(?)
+          )
         ORDER BY code
-        LIMIT 100
         """,
-        (search_text, f"%{search_text}%", f"%{search_text}%"),
+        (search_text, like_text, like_text, like_text),
     ).fetchall()
     return [dict(row) for row in rows]
 
@@ -208,9 +235,20 @@ project_id = None
 
 with project_create_tab:
     st.write("#### 新しい案件を登録")
-    company_search = st.text_input("企業検索（企業コード・企業名）", key="integrated_project_company_search")
+    company_search = st.text_input(
+        "企業検索（企業コード・企業名・担当者名）",
+        placeholder="例：NTR / ニトリ / 田中",
+        key="integrated_project_company_search",
+    )
     companies = _load_companies(company_search)
-    company_options = {f"{row['code']}：{row['name']}": int(row["id"]) for row in companies}
+
+    company_options = {}
+    for row in companies:
+        contact_person = str(row.get("contact_person") or "").strip()
+        contact_label = f" ｜ 担当：{contact_person}" if contact_person else ""
+        company_options[
+            f"{row['code']}：{row['name']}{contact_label}"
+        ] = int(row["id"])
 
     selected_company_id = None
     if company_options:

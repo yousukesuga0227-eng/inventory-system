@@ -1,8 +1,8 @@
 import streamlit as st
 from database import get_connection
-from auth import check_admin
+from auth import check_system_admin
 
-check_admin()
+check_system_admin()
 
 conn = get_connection()
 

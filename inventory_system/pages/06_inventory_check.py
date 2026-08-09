@@ -1,9 +1,9 @@
 import streamlit as st
 import pandas as pd
 from database import get_connection
-from auth import check_login
+from auth import check_admin
 
-check_login()
+check_admin()
 conn = get_connection()
 
 st.set_page_config(

@@ -1,8 +1,8 @@
 import streamlit as st
 from database import get_connection, log_action
-from auth import check_admin
+from auth import check_system_admin
 
-check_admin()
+check_system_admin()
 
 conn = get_connection()
 
@@ -63,7 +63,7 @@ with tabs[1]:
 
     new_role = st.selectbox(
         "権限",
-        ["user", "admin"],
+        ["user", "admin", "system_admin"],
         key="new_user_role"
     )
 
@@ -160,7 +160,7 @@ with tabs[2]:
             value=user["display_name"] or ""
         )
 
-        role_options = ["user", "admin"]
+        role_options = ["user", "admin", "system_admin"]
         current_role = user["role"] or "user"
 
         if current_role not in role_options:

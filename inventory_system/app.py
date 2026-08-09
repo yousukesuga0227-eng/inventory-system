@@ -324,7 +324,7 @@ def home_page():
     st.write("---")
 
     st.markdown(
-        '<div class="menu-title">📋 システムメニュー</div>',
+        '<div class="menu-title">📋 作業メニュー</div>',
         unsafe_allow_html=True
     )
 
@@ -341,90 +341,87 @@ def home_page():
 
             st.rerun()
 
-    menu_items = []
+    main_items = [
+        {
+            "page": "pages/02_item_add.py",
+            "label": "➕ 案件・商品追加",
+        },
+        {
+            "page": "pages/03_stock.py",
+            "label": "📥📤 入出庫",
+        },
+        {
+            "page": "pages/04_stock_list.py",
+            "label": "🔍 在庫検索",
+        },
+        {
+            "page": "pages/05_history.py",
+            "label": "📝 入出庫履歴",
+        },
+        {
+            "page": "pages/13_pallet_inventory.py",
+            "label": "📦 パレット在庫",
+        },
+    ]
 
-    if st.session_state.role == "admin":
+    st.markdown("#### 🚚 現場メニュー")
 
-        menu_items.extend(
-            [
-                {
-                    "page": "pages/01_projects.py",
-                    "label": "📁 案件管理"
-                },
-                {
-                    "page": "pages/02_items.py",
-                    "label": "📦 商品管理"
-                },
-            ]
-        )
-
-    if st.session_state.role in ["admin", "user", "warehouse", "label_user"]:
-
-        menu_items.extend(
-            [
-                {
-                    "page": "pages/03_stock.py",
-                    "label": "📥📤 入出庫登録"
-                },
-                {
-                    "page": "pages/04_stock_list.py",
-                    "label": "📊 在庫一覧"
-                },
-                {
-                    "page": "pages/07_item_search.py",
-                    "label": "🔍 商品検索"
-                },
-                {
-                    "label": "📄 出荷指示書"
-                },
-                {
-                    "page": "pages/ラベル出力.py",
-                    "label": "🏷️ ラベル出力"
-                },
-                
-            ]
-        )
-
-    if st.session_state.role == "admin":
-
-        menu_items.extend(
-            [
-                {
-                    "page": "pages/05_history.py",
-                    "label": "📝 入出庫履歴"
-                },
-                {
-                    "page": "pages/06_inventory_check.py",
-                    "label": "🧮 棚卸"
-                },
-                {
-                    "page": "pages/09_operation_logs.py",
-                    "label": "🧾 操作履歴"
-                },
-                {
-                    "page": "pages/10_admin.py",
-                    "label": "⚙️ 管理ページ"
-                },
-                {
-                    "page": "pages/11_user_admin.py",
-                    "label": "👤 ユーザー管理"
-                },
-            ]
-        )
-
-    for i in range(0, len(menu_items), 3):
-
-        cols = st.columns(3)
-
-        row_items = menu_items[i:i + 3]
-
-        for col, item in zip(cols, row_items):
-
+    for i in range(0, len(main_items), 2):
+        cols = st.columns(2)
+        for col, item in zip(cols, main_items[i:i + 2]):
             with col:
-
                 st.page_link(
                     item["page"],
-                    label=item["label"]
+                    label=item["label"],
+                    use_container_width=True,
+                )
+
+    tool_items = []
+
+    if st.session_state.role in ["system_admin", "admin", "user", "warehouse", "label_user"]:
+        tool_items.append(
+            {
+                "page": "pages/ラベル出力.py",
+                "label": "🏷️ ラベル出力",
+            }
+        )
+
+    if tool_items:
+        with st.expander("🧰 その他の作業", expanded=False):
+            for item in tool_items:
+                st.page_link(
+                    item["page"],
+                    label=item["label"],
+                    use_container_width=True,
+                )
+
+    if st.session_state.role in ["admin", "system_admin"]:
+        manager_items = [
+            {"page": "pages/06_inventory_check.py", "label": "🧮 棚卸"},
+            {"page": "pages/12_company.py", "label": "🏢 企業管理"},
+            {"page": "pages/10_admin.py", "label": "✏️ 案件・商品編集"},
+        ]
+
+        with st.expander("🛠️ 管理者メニュー", expanded=False):
+            for item in manager_items:
+                st.page_link(
+                    item["page"],
+                    label=item["label"],
+                    use_container_width=True,
+                )
+
+    if st.session_state.role == "system_admin":
+        system_items = [
+            {"page": "pages/09_operation_logs.py", "label": "🧾 操作履歴"},
+            {"page": "pages/11_user_admin.py", "label": "👤 ユーザー管理"},
+        ]
+
+        with st.expander("🛡️ システム管理者メニュー", expanded=False):
+            for item in system_items:
+                st.page_link(
+                    item["page"],
+                    label=item["label"],
+                    use_container_width=True,
                 )
 
     st.write("---")
@@ -440,33 +437,45 @@ def home_page():
 # サイドバー表示制御
 # =====================
 
-pages = [
-    st.Page(home_page, title="ホーム", icon="🏠"),
-    st.Page("pages/03_stock.py", title="入出庫登録", icon="📥"),
-    st.Page("pages/04_stock_list.py", title="在庫一覧", icon="📊"),
-    st.Page("pages/07_item_search.py", title="商品検索", icon="🔍"),
-    st.Page("pages/ラベル出力.py", title="ラベル出力", icon="🏷️"),
-    st.Page(
-    "pages/13_pallet_inventory.py",
-    title="パレット在庫管理",
-    icon="📦",
-),
-    st.Page("pages/99_manual.py", title="ヘルプ", icon="❓"),
-]
+home = st.Page(home_page, title="ホーム", icon="🏠")
+field_add_page = st.Page("pages/02_item_add.py", title="案件・商品追加", icon="➕")
+stock_page = st.Page("pages/03_stock.py", title="入出庫", icon="📥")
+stock_list_page = st.Page("pages/04_stock_list.py", title="在庫検索", icon="🔍")
+history_page = st.Page("pages/05_history.py", title="入出庫履歴", icon="📝")
+pallet_page = st.Page("pages/13_pallet_inventory.py", title="パレット在庫", icon="📦")
+help_page = st.Page("pages/99_manual.py", title="ヘルプ", icon="❓")
 
-if st.session_state.role == "admin":
+nav_pages = {
+    "現場": [
+        home,
+        field_add_page,
+        stock_page,
+        stock_list_page,
+        history_page,
+        pallet_page,
+    ],
+}
 
-    pages.extend(
-        [
-            st.Page("pages/01_projects.py", title="案件管理", icon="📁"),
-            st.Page("pages/02_items.py", title="商品管理", icon="📦"),
-            st.Page("pages/05_history.py", title="入出庫履歴", icon="📝"),
-            st.Page("pages/06_inventory_check.py", title="棚卸", icon="🧮"),
-            st.Page("pages/09_operation_logs.py", title="操作履歴", icon="🧾"),
-            st.Page("pages/10_admin.py", title="管理ページ", icon="⚙️"),
-            st.Page("pages/11_user_admin.py", title="ユーザー管理", icon="👤"),
-        ]
-    )
+if st.session_state.role in ["system_admin", "admin", "user", "warehouse", "label_user"]:
+    nav_pages["ツール"] = [
+        st.Page("pages/ラベル出力.py", title="ラベル出力", icon="🏷️"),
+        help_page,
+    ]
+else:
+    nav_pages["ツール"] = [help_page]
 
-pg = st.navigation(pages)
+if st.session_state.role in ["admin", "system_admin"]:
+    nav_pages["管理者"] = [
+        st.Page("pages/06_inventory_check.py", title="棚卸", icon="🧮"),
+        st.Page("pages/12_company.py", title="企業管理", icon="🏢"),
+        st.Page("pages/10_admin.py", title="案件・商品編集", icon="✏️"),
+    ]
+
+if st.session_state.role == "system_admin":
+    nav_pages["システム管理"] = [
+        st.Page("pages/09_operation_logs.py", title="操作履歴", icon="🧾"),
+        st.Page("pages/11_user_admin.py", title="ユーザー管理", icon="👤"),
+    ]
+
+pg = st.navigation(nav_pages, position="sidebar")
 pg.run()
