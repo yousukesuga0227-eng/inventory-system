@@ -616,7 +616,7 @@ def _source_rows(conn):
         FROM pallet_receiving_plans
         WHERE
             COALESCE(is_deleted, FALSE) = FALSE
-            AND status <> '取消'
+            AND status = '入庫待ち'
             AND COALESCE(TRIM(item_name), '') <> ''
         """
     )
