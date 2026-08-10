@@ -2859,6 +2859,187 @@ def ship_pallet(
         raise
 
 
+
+def ship_pallet_batch(conn, shipments, username, remarks=""):
+    """複数パレットを1トランザクションでまとめて出庫する。"""
+
+    normalized = []
+    seen_codes = set()
+
+    for shipment in list(shipments or []):
+        pallet_code = str(
+            shipment.get("pallet_code") or ""
+        ).strip().upper()
+
+        try:
+            quantity = int(shipment.get("quantity") or 0)
+        except (TypeError, ValueError) as exc:
+            raise PalletStockError(
+                "出庫数量に不正な値があります。"
+            ) from exc
+
+        if not pallet_code:
+            raise PalletStockError(
+                "パレットQRが空のデータがあります。"
+            )
+
+        if quantity <= 0:
+            raise PalletStockError(
+                "出庫数量は1個以上で入力してください。"
+            )
+
+        if pallet_code in seen_codes:
+            raise PalletStockError(
+                f"{pallet_code} が重複しています。"
+            )
+
+        seen_codes.add(pallet_code)
+        normalized.append(
+            {
+                "pallet_code": pallet_code,
+                "quantity": quantity,
+            }
+        )
+
+    if not normalized:
+        raise PalletStockError(
+            "出庫するパレットを1枚以上読み取ってください。"
+        )
+
+    prepared = []
+
+    for shipment in normalized:
+        pallet = get_pallet_by_code(
+            conn,
+            shipment["pallet_code"],
+        )
+
+        if pallet is None:
+            raise PalletNotFoundError(
+                f"パレット「{shipment['pallet_code']}」"
+                "が見つかりません。"
+            )
+
+        before_qty = int(pallet["current_qty"])
+        quantity = int(shipment["quantity"])
+
+        if before_qty <= 0:
+            raise PalletStockError(
+                f"{pallet['pallet_code']} は"
+                "すでに出庫済みです。"
+            )
+
+        if quantity > before_qty:
+            raise PalletStockError(
+                f"{pallet['pallet_code']} の現在庫は"
+                f" {before_qty:,}個です。"
+            )
+
+        prepared.append(
+            {
+                "pallet": pallet,
+                "quantity": quantity,
+                "before_qty": before_qty,
+                "after_qty": before_qty - quantity,
+            }
+        )
+
+    now = _now()
+    results = []
+
+    try:
+        for row in prepared:
+            pallet = row["pallet"]
+            pallet_id = int(pallet["id"])
+            before_qty = int(row["before_qty"])
+            quantity = int(row["quantity"])
+            after_qty = int(row["after_qty"])
+            new_status = (
+                "出庫済み"
+                if after_qty == 0
+                else "保管中"
+            )
+
+            cursor = _execute(
+                conn,
+                f"""
+                UPDATE pallet_inventory
+                SET
+                    current_qty = ?,
+                    status = ?,
+                    updated_at = ?
+                WHERE
+                    id = ?
+                    AND current_qty = ?
+                    AND {_not_deleted_condition("is_deleted")}
+                """,
+                (
+                    after_qty,
+                    new_status,
+                    now,
+                    pallet_id,
+                    before_qty,
+                ),
+            )
+
+            rowcount = _cursor_attribute(
+                cursor,
+                "rowcount",
+            )
+
+            if rowcount is not None and rowcount != 1:
+                raise PalletConflictError(
+                    f"{pallet['pallet_code']} が"
+                    "別端末で更新されました。"
+                    "もう一度読み取り直してください。"
+                )
+
+            _execute(
+                conn,
+                """
+                INSERT INTO pallet_history (
+                    pallet_id,
+                    pallet_code,
+                    history_type,
+                    qty,
+                    before_qty,
+                    after_qty,
+                    username,
+                    remarks,
+                    created_at
+                )
+                VALUES (?, ?, '出庫', ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    pallet_id,
+                    pallet["pallet_code"],
+                    quantity,
+                    before_qty,
+                    after_qty,
+                    username,
+                    remarks.strip() or None,
+                    now,
+                ),
+            )
+
+            result = dict(pallet)
+            result.update(
+                {
+                    "shipped_qty": quantity,
+                    "before_qty": before_qty,
+                    "after_qty": after_qty,
+                    "status": new_status,
+                }
+            )
+            results.append(result)
+
+        conn.commit()
+        return results
+
+    except Exception:
+        _rollback_safely(conn)
+        raise
+
 def list_pallet_stock(
     conn,
     status="保管中",

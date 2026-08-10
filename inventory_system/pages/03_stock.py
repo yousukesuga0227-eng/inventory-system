@@ -547,9 +547,13 @@ with tab_in:
 # ============================================================
 # 出庫
 # ============================================================
+# === SHARK SIMPLE OUTBOUND 20260810 START ===
 with tab_out:
     st.subheader("出庫処理")
-    st.caption("①案件選択 → ②出荷指示書 → ③バーコード検品 → ④出庫登録 → ⑤納品書・受領書")
+    st.caption(
+        "①案件選択 → ②出荷指示書でピッキング → "
+        "③積込前にバーコード読取 → ④出庫確定 → ⑤納品書・受領書"
+    )
 
     selected_out_label = st.selectbox(
         "案件選択",
@@ -567,7 +571,8 @@ with tab_out:
 
     out_items = conn.execute(
         """
-        SELECT id, code, name, COALESCE(required_quantity, 1) AS required_quantity
+        SELECT id, code, name,
+               COALESCE(required_quantity, 1) AS required_quantity
         FROM items
         WHERE project_id = ?
           AND COALESCE(is_active, TRUE) = TRUE
@@ -581,17 +586,45 @@ with tab_out:
         st.warning("この案件には有効な商品が登録されていません")
     else:
         for item in out_items:
-            item["required_quantity"] = max(1, int(item["required_quantity"] or 1))
+            planned_qty = max(1, int(item["required_quantity"] or 1))
+            shipped_row = conn.execute(
+                """
+                SELECT COALESCE(
+                    SUM(
+                        CASE
+                            WHEN type = '出庫' AND qty < 0
+                            THEN -qty
+                            ELSE 0
+                        END
+                    ),
+                    0
+                )
+                FROM stock_logs
+                WHERE project_id = ? AND item_id = ?
+                """,
+                (out_project_id, item["id"]),
+            ).fetchone()
+            already_shipped = int(shipped_row[0] or 0)
 
-        out_item_map = {safe_text(item["code"]): item for item in out_items}
+            item["required_quantity"] = planned_qty
+            item["already_shipped"] = already_shipped
+            item["remaining_quantity"] = max(
+                planned_qty - already_shipped,
+                0,
+            )
+
+        out_item_map = {
+            safe_text(item["code"]): item
+            for item in out_items
+        }
         required_map = {
-            safe_text(item["code"]): item["required_quantity"]
+            safe_text(item["code"]): item["remaining_quantity"]
             for item in out_items
         }
         st.session_state.stock_out_item_map = out_item_map
         st.session_state.stock_out_required_map = required_map
 
-        document_items = [
+        instruction_items = [
             {
                 "code": item["code"],
                 "name": item["name"],
@@ -602,209 +635,327 @@ with tab_out:
 
         st.info(
             f"選択案件：{out_project['code']} / {out_project['name']}　"
-            f"商品種類：{len(out_items)}　総数：{sum(required_map.values())}"
+            f"商品種類：{len(out_items):,}品"
         )
 
         shipping_pdf = create_project_document(
             "出荷指示書",
             out_project,
             out_company,
-            document_items,
+            instruction_items,
             include_barcode=True,
         )
         st.download_button(
             "📄 出荷指示書をダウンロード",
             data=shipping_pdf,
-            file_name=f"出荷指示書_{safe_filename(out_project['code'])}.pdf",
+            file_name=(
+                f"出荷指示書_{safe_filename(out_project['code'])}.pdf"
+            ),
             mime="application/pdf",
             use_container_width=True,
         )
-        st.caption("A4横・1ページ最大10品で出力します。")
-
+        st.caption(
+            "出荷指示書を見てピッキングし、"
+            "積み込み前に実際に載せる商品だけ読み取ります。"
+        )
         st.write("---")
-        st.markdown("### バーコード検品")
 
         if st.session_state.stock_out_registered:
-            st.success("この画面では出庫登録済みです。下の納品書・受領書を保存してください。")
-
-        st.text_input(
-            "バーコード読み取り",
-            key="stock_out_barcode_input",
-            placeholder="ここを1回クリックしてからスキャン",
-            on_change=add_outbound_barcode,
-            disabled=st.session_state.stock_out_registered,
-        )
-
-        notice = st.session_state.stock_out_notice
-        if notice:
-            notice_type, notice_message = notice
-            if notice_type == "error":
-                st.error(notice_message)
-            else:
-                st.success(notice_message)
-
-        scanned_codes = st.session_state.stock_out_scanned_codes
-        scan_counter = Counter(split_unit_barcode(code)[0] for code in scanned_codes)
-        scanned_units_by_item = {code: set() for code in out_item_map}
-        for scanned_code in scanned_codes:
-            base_code, unit_number = split_unit_barcode(scanned_code)
-            if base_code in scanned_units_by_item and unit_number is not None:
-                scanned_units_by_item[base_code].add(unit_number)
-
-        required_total = sum(required_map.values())
-        checked_total = sum(
-            min(scan_counter.get(code, 0), required_map[code])
-            for code in required_map
-        )
-        progress = checked_total / required_total if required_total else 0
-        st.progress(progress)
-
-        metric1, metric2, metric3 = st.columns(3)
-        metric1.metric("検品数", f"{checked_total} / {required_total}")
-        metric2.metric("残り", max(required_total - checked_total, 0))
-        metric3.metric("進捗", f"{progress * 100:.0f}%")
-
-        progress_rows = []
-        all_complete = True
-        for code, item in out_item_map.items():
-            required_qty = required_map[code]
-            scanned_qty = scan_counter.get(code, 0)
-            diff = required_qty - scanned_qty
-            if diff == 0:
-                status = "✅ 完了"
-            else:
-                status = f"🟡 残り {diff}"
-                all_complete = False
-
-            unit_numbers = scanned_units_by_item.get(code, set())
-            progress_rows.append(
-                {
-                    "商品コード": code,
-                    "商品名": item["name"],
-                    "必要数": required_qty,
-                    "読取数": scanned_qty,
-                    "状態": status,
-                    "読取個体No.": format_unit_numbers(unit_numbers),
-                }
+            st.success(
+                "今回の出庫登録は完了しています。"
+                "納品書・受領書を保存してください。"
             )
 
-        st.dataframe(progress_rows, width="stretch", hide_index=True)
+            if st.session_state.stock_out_documents:
+                documents = st.session_state.stock_out_documents
+                st.markdown("### 📄 今回の納品書・受領書")
+                doc_col1, doc_col2 = st.columns(2)
 
-        cancel_col, reset_col = st.columns(2)
-        with cancel_col:
-            if st.button(
-                "↩️ 直前の読取を取り消す",
-                disabled=(not scanned_codes or st.session_state.stock_out_registered),
-                use_container_width=True,
-            ):
-                removed = st.session_state.stock_out_scanned_codes.pop()
-                st.session_state.stock_out_notice = ("success", f"取り消しました：{removed}")
-                st.rerun()
+                with doc_col1:
+                    st.download_button(
+                        "📄 納品書をダウンロード",
+                        data=documents["delivery"],
+                        file_name=(
+                            f"納品書_{safe_filename(out_project['code'])}.pdf"
+                        ),
+                        mime="application/pdf",
+                        use_container_width=True,
+                    )
 
-        with reset_col:
+                with doc_col2:
+                    st.download_button(
+                        "📄 受領書をダウンロード",
+                        data=documents["receipt"],
+                        file_name=(
+                            f"受領書_{safe_filename(out_project['code'])}.pdf"
+                        ),
+                        mime="application/pdf",
+                        use_container_width=True,
+                    )
+
             if st.button(
-                "🗑 読取をすべてリセット",
-                disabled=(not scanned_codes or st.session_state.stock_out_registered),
+                "🧹 次の出庫を開始",
+                key="stock_out_start_next",
                 use_container_width=True,
             ):
                 clear_outbound_state()
                 st.rerun()
 
-        st.write("---")
+        else:
+            st.markdown("### 積み込み前チェック")
+            st.caption(
+                "案件に含まれる商品だけ追加できます。"
+                "今回読み取った数量だけが納品書・受領書に載ります。"
+            )
 
-        if all_complete and not st.session_state.stock_out_registered:
-            st.success("全商品が揃いました。出庫登録できます。")
-        elif not st.session_state.stock_out_registered:
-            st.warning("全商品が揃うまで出庫登録はできません。")
+            st.text_input(
+                "バーコード読み取り",
+                key="stock_out_barcode_input",
+                placeholder="ここを1回クリックしてからスキャン",
+                on_change=add_outbound_barcode,
+            )
 
-        if st.button(
-            "✅ 出庫登録",
-            type="primary",
-            disabled=(not all_complete or st.session_state.stock_out_registered),
-            use_container_width=True,
-        ):
-            shortages = []
-            for item in out_items:
-                current_stock = conn.execute(
-                    """
-                    SELECT COALESCE(SUM(qty), 0)
-                    FROM stock_logs
-                    WHERE project_id = ? AND item_id = ?
-                    """,
-                    (out_project_id, item["id"]),
-                ).fetchone()[0]
-                required_qty = item["required_quantity"]
-                if current_stock < required_qty:
-                    shortages.append(
-                        f"{item['code']} {item['name']}：在庫 {current_stock} / 必要 {required_qty}"
-                    )
+            notice = st.session_state.stock_out_notice
+            if notice:
+                notice_type, notice_message = notice
+                if notice_type == "error":
+                    st.error(notice_message)
+                else:
+                    st.success(notice_message)
 
-            if shortages:
-                st.error("在庫不足のため登録できません。")
-                for shortage in shortages:
-                    st.write(f"・{shortage}")
-            else:
-                try:
-                    for item in out_items:
-                        conn.execute(
-                            """
-                            INSERT INTO stock_logs(project_id, item_id, qty, type, username)
-                            VALUES (?, ?, ?, ?, ?)
-                            """,
-                            (
-                                out_project_id,
-                                item["id"],
-                                -item["required_quantity"],
-                                "出庫",
-                                st.session_state.username,
-                            ),
-                        )
-                    conn.commit()
+            scanned_codes = st.session_state.stock_out_scanned_codes
+            scan_counter = Counter(
+                split_unit_barcode(code)[0]
+                for code in scanned_codes
+            )
+            checked_total = len(scanned_codes)
 
-                    delivery_pdf = create_project_document(
-                        "納品書",
-                        out_project,
-                        out_company,
-                        document_items,
-                        include_barcode=False,
-                    )
-                    receipt_pdf = create_project_document(
-                        "受領書",
-                        out_project,
-                        out_company,
-                        document_items,
-                        include_barcode=False,
-                    )
-                    st.session_state.stock_out_documents = {
-                        "delivery": delivery_pdf,
-                        "receipt": receipt_pdf,
+            metric1, metric2 = st.columns(2)
+            metric1.metric("今回の読取", f"{checked_total:,}個")
+            metric2.metric(
+                "商品種類",
+                f"{sum(1 for qty in scan_counter.values() if qty > 0):,}品",
+            )
+
+            scanned_rows = []
+            for code, scanned_qty in scan_counter.items():
+                if scanned_qty <= 0:
+                    continue
+
+                item = out_item_map.get(code)
+                if item is None:
+                    continue
+
+                scanned_rows.append(
+                    {
+                        "商品コード": code,
+                        "商品名": item["name"],
+                        "今回読取": scanned_qty,
+                        "案件残数": item["remaining_quantity"],
                     }
-                    st.session_state.stock_out_registered = True
-                    st.session_state.stock_out_notice = None
-                    st.rerun()
-                except Exception as error:
-                    rollback_connection(conn)
-                    st.error(f"出庫登録に失敗しました：{error}")
+                )
 
-        if st.session_state.stock_out_documents:
-            st.markdown("### 登録完了書類")
-            st.success("出庫登録が完了しました。納品書と受領書をダウンロードできます。")
-            doc_col1, doc_col2 = st.columns(2)
-            with doc_col1:
-                st.download_button(
-                    "📄 納品書をダウンロード",
-                    data=st.session_state.stock_out_documents["delivery"],
-                    file_name=f"納品書_{safe_filename(out_project['code'])}.pdf",
-                    mime="application/pdf",
+            if scanned_rows:
+                st.dataframe(
+                    scanned_rows,
+                    hide_index=True,
                     use_container_width=True,
                 )
-            with doc_col2:
-                st.download_button(
-                    "📄 受領書をダウンロード",
-                    data=st.session_state.stock_out_documents["receipt"],
-                    file_name=f"受領書_{safe_filename(out_project['code'])}.pdf",
-                    mime="application/pdf",
-                    use_container_width=True,
+            else:
+                st.info(
+                    "まだ商品を読み取っていません。"
+                    "積み込む商品を順番にスキャンしてください。"
                 )
+
+            cancel_col, reset_col = st.columns(2)
+
+            with cancel_col:
+                if st.button(
+                    "↩️ 直前の読取を取り消す",
+                    disabled=not scanned_codes,
+                    use_container_width=True,
+                ):
+                    removed = (
+                        st.session_state.stock_out_scanned_codes.pop()
+                    )
+                    st.session_state.stock_out_notice = (
+                        "success",
+                        f"取り消しました：{removed}",
+                    )
+                    st.rerun()
+
+            with reset_col:
+                if st.button(
+                    "🗑 読取をすべてリセット",
+                    disabled=not scanned_codes,
+                    use_container_width=True,
+                ):
+                    clear_outbound_state()
+                    st.rerun()
+
+            st.write("---")
+            can_confirm = checked_total > 0
+
+            if can_confirm:
+                st.success(
+                    f"今回 {checked_total:,}個を出庫できます。"
+                )
+            else:
+                st.warning(
+                    "商品を1個以上読み取ると出庫確定できます。"
+                )
+
+            if st.button(
+                f"✅ 読み取った {checked_total:,}個を出庫確定",
+                type="primary",
+                disabled=not can_confirm,
+                use_container_width=True,
+            ):
+                shortages = []
+                plan_overages = []
+                confirmed_items = []
+
+                for code, scanned_qty in scan_counter.items():
+                    if scanned_qty <= 0:
+                        continue
+
+                    item = out_item_map[code]
+
+                    current_stock = conn.execute(
+                        """
+                        SELECT COALESCE(SUM(qty), 0)
+                        FROM stock_logs
+                        WHERE project_id = ? AND item_id = ?
+                        """,
+                        (out_project_id, item["id"]),
+                    ).fetchone()[0]
+
+                    shipped_row = conn.execute(
+                        """
+                        SELECT COALESCE(
+                            SUM(
+                                CASE
+                                    WHEN type = '出庫' AND qty < 0
+                                    THEN -qty
+                                    ELSE 0
+                                END
+                            ),
+                            0
+                        )
+                        FROM stock_logs
+                        WHERE project_id = ? AND item_id = ?
+                        """,
+                        (out_project_id, item["id"]),
+                    ).fetchone()
+
+                    latest_already_shipped = int(
+                        shipped_row[0] or 0
+                    )
+                    latest_remaining = max(
+                        int(item["required_quantity"])
+                        - latest_already_shipped,
+                        0,
+                    )
+
+                    if int(current_stock or 0) < scanned_qty:
+                        shortages.append(
+                            f"{code} {item['name']}："
+                            f"在庫 {int(current_stock or 0):,} / "
+                            f"今回 {scanned_qty:,}"
+                        )
+
+                    if scanned_qty > latest_remaining:
+                        plan_overages.append(
+                            f"{code} {item['name']}："
+                            f"案件残数 {latest_remaining:,} / "
+                            f"今回 {scanned_qty:,}"
+                        )
+
+                    confirmed_items.append(
+                        {
+                            "item": item,
+                            "quantity": scanned_qty,
+                        }
+                    )
+
+                if shortages:
+                    st.error("在庫不足のため出庫できません。")
+                    for message in shortages:
+                        st.write(f"・{message}")
+
+                elif plan_overages:
+                    st.error(
+                        "案件の残数量を超える商品があるため"
+                        "出庫できません。"
+                    )
+                    for message in plan_overages:
+                        st.write(f"・{message}")
+
+                else:
+                    document_items = [
+                        {
+                            "code": row["item"]["code"],
+                            "name": row["item"]["name"],
+                            "quantity": row["quantity"],
+                        }
+                        for row in confirmed_items
+                    ]
+
+                    try:
+                        # 既存PDF関数をそのまま使用。
+                        delivery_pdf = create_project_document(
+                            "納品書",
+                            out_project,
+                            out_company,
+                            document_items,
+                            include_barcode=False,
+                        )
+                        receipt_pdf = create_project_document(
+                            "受領書",
+                            out_project,
+                            out_company,
+                            document_items,
+                            include_barcode=False,
+                        )
+
+                        for row in confirmed_items:
+                            item = row["item"]
+                            quantity = int(row["quantity"])
+
+                            conn.execute(
+                                """
+                                INSERT INTO stock_logs(
+                                    project_id,
+                                    item_id,
+                                    qty,
+                                    type,
+                                    username
+                                )
+                                VALUES (?, ?, ?, ?, ?)
+                                """,
+                                (
+                                    out_project_id,
+                                    item["id"],
+                                    -quantity,
+                                    "出庫",
+                                    st.session_state.username,
+                                ),
+                            )
+
+                        conn.commit()
+                        st.session_state.stock_out_documents = {
+                            "delivery": delivery_pdf,
+                            "receipt": receipt_pdf,
+                        }
+                        st.session_state.stock_out_registered = True
+                        st.session_state.stock_out_notice = None
+                        st.rerun()
+
+                    except Exception as error:
+                        rollback_connection(conn)
+                        st.error(
+                            f"出庫登録に失敗しました：{error}"
+                        )
+# === SHARK SIMPLE OUTBOUND 20260810 END ===
 
 conn.close()

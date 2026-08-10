@@ -25,11 +25,15 @@ from pages.pallet.pallet_db import (
     renumber_pallet_registration,
     set_pallet_category_next_sequence,
     ship_pallet,
+    ship_pallet_batch,
     update_pallet_batch,
 )
 from pages.pallet.pallet_documents import (
     create_pallet_a4_pdf,
     create_receiving_plan_a4_pdf,
+)
+from pages.pallet.pallet_shipping_documents import (
+    create_pallet_shipment_document,
 )
 from pages.pallet.pallet_tables import (
     PalletSchemaError,
@@ -91,6 +95,11 @@ SESSION_DEFAULTS = {
     "simple_plan_flash": "",
     "simple_plan_form_version": 0,
     "simple_qr_flash": "",
+    "simple_pallet_out_rows": [],
+    "simple_pallet_out_documents": None,
+    "simple_pallet_out_company_id": None,
+    "simple_pallet_out_company_name": "",
+    "simple_pallet_out_form_version": 0,
     "simple_admin_flash": "",
     "simple_admin_pdf": None,
     "simple_admin_pdf_name": "",
@@ -645,14 +654,22 @@ def list_unclassified_cleanup_candidates(conn):
                     COALESCE(pi.is_deleted, FALSE) = FALSE
                     AND COALESCE(pi.batch_code, '') <> ''
                     AND pi.batch_code = rp.batch_code
-            ) AS linked_inventory_count
+            ) AS linked_inventory_count,
+            (
+                SELECT COALESCE(SUM(pi.current_qty), 0)
+                FROM pallet_inventory pi
+                WHERE
+                    COALESCE(pi.is_deleted, FALSE) = FALSE
+                    AND COALESCE(pi.batch_code, '') <> ''
+                    AND pi.batch_code = rp.batch_code
+            ) AS linked_current_qty_total
         FROM pallet_receiving_plans rp
         LEFT JOIN companies c ON c.id = rp.company_id
         LEFT JOIN items i ON i.id = rp.item_id
         LEFT JOIN pallet_categories pc ON pc.id = rp.category_id
         WHERE
             COALESCE(rp.is_deleted, FALSE) = FALSE
-            AND rp.status <> '取消'
+            AND rp.status = '入庫待ち'
             AND (
                 COALESCE(NULLIF(TRIM(rp.category_name), ''), pc.name, '未分類')
                     = '未分類'
@@ -666,6 +683,9 @@ def list_unclassified_cleanup_candidates(conn):
         linked_count = int(
             row_value(row, "linked_inventory_count", 0) or 0
         )
+        linked_current_qty = int(
+            row_value(row, "linked_current_qty_total", 0) or 0
+        )
         candidates.append(
             {
                 "source_type": "plan",
@@ -678,13 +698,13 @@ def list_unclassified_cleanup_candidates(conn):
                 "商品コード": str(row_value(row, "item_code", "") or ""),
                 "商品名": str(row_value(row, "item_name", "") or ""),
                 "パレット数": int(row_value(row, "pallet_count", 0) or 0),
-                "現在個数": 0,
+                "現在個数": linked_current_qty,
                 "登録日時": format_datetime(row_value(row, "created_at", "")),
-                "can_cancel": linked_count == 0,
+                "can_cancel": linked_current_qty <= 0,
                 "理由": (
                     ""
-                    if linked_count == 0
-                    else "入庫済みパレットが紐づいているため取消不可"
+                    if linked_current_qty <= 0
+                    else "現在庫が残っているため取消不可"
                 ),
             }
         )
@@ -791,10 +811,14 @@ def cleanup_unclassified_candidate(conn, candidate):
         ).strip()
 
         linked_count = 0
+        linked_current_qty = 0
+
         if current_batch_code:
             linked_row = conn.execute(
                 """
-                SELECT COUNT(*) AS count_value
+                SELECT
+                    COUNT(*) AS count_value,
+                    COALESCE(SUM(current_qty), 0) AS current_qty_total
                 FROM pallet_inventory
                 WHERE
                     batch_code = ?
@@ -805,10 +829,13 @@ def cleanup_unclassified_candidate(conn, candidate):
             linked_count = int(
                 row_value(linked_row, "count_value", 0) or 0
             )
+            linked_current_qty = int(
+                row_value(linked_row, "current_qty_total", 0) or 0
+            )
 
-        if linked_count > 0:
+        if linked_current_qty > 0:
             raise PalletError(
-                "この登録には入庫済みパレットが紐づいているため取消できません。"
+                f"現在庫が {linked_current_qty:,} 個残っているため取消できません。"
             )
 
         conn.execute(
@@ -821,8 +848,25 @@ def cleanup_unclassified_candidate(conn, candidate):
             """,
             (now, source_id),
         )
+
+        if current_batch_code and linked_count > 0:
+            conn.execute(
+                """
+                UPDATE pallet_inventory
+                SET is_deleted = TRUE, updated_at = ?
+                WHERE
+                    batch_code = ?
+                    AND COALESCE(is_deleted, FALSE) = FALSE
+                    AND COALESCE(current_qty, 0) <= 0
+                """,
+                (now, current_batch_code),
+            )
+
         conn.commit()
-        return "未分類の入庫予定を取消しました。"
+        return (
+            "未分類データを整理しました。"
+            "現在庫0のパレット本体は整理対象から除外し、入出庫履歴は残しています。"
+        )
 
     if source_type == "inventory":
         if batch_code:
@@ -886,6 +930,225 @@ def cleanup_unclassified_candidate(conn, candidate):
         )
 
     raise PalletError("未分類データの区分が不正です。")
+# === SHARK UNCLASSIFIED ZERO STOCK CLEANUP FIX ===
+
+def force_cleanup_unclassified_candidate(conn, candidate):
+    source_type = str(candidate.get("source_type") or "")
+    source_id = int(candidate.get("source_id") or 0)
+    batch_code = str(candidate.get("batch_code") or "").strip()
+    now = datetime.now(JST)
+
+    def inventory_rows_for_batch(target_batch_code, representative_id):
+        if target_batch_code:
+            return conn.execute(
+                """
+                SELECT
+                    pi.id,
+                    pi.current_qty,
+                    COALESCE(
+                        NULLIF(TRIM(pi.category_name), ''),
+                        pc.name,
+                        '未分類'
+                    ) AS category_name
+                FROM pallet_inventory pi
+                LEFT JOIN pallet_categories pc ON pc.id = pi.category_id
+                WHERE
+                    pi.batch_code = ?
+                    AND COALESCE(pi.is_deleted, FALSE) = FALSE
+                ORDER BY pi.id
+                """,
+                (target_batch_code,),
+            ).fetchall()
+
+        return conn.execute(
+            """
+            SELECT
+                pi.id,
+                pi.current_qty,
+                COALESCE(
+                    NULLIF(TRIM(pi.category_name), ''),
+                    pc.name,
+                    '未分類'
+                ) AS category_name
+            FROM pallet_inventory pi
+            LEFT JOIN pallet_categories pc ON pc.id = pi.category_id
+            WHERE
+                pi.id = ?
+                AND COALESCE(pi.is_deleted, FALSE) = FALSE
+            """,
+            (representative_id,),
+        ).fetchall()
+
+    try:
+        if source_type == "plan":
+            plan = conn.execute(
+                """
+                SELECT
+                    rp.id,
+                    rp.batch_code,
+                    COALESCE(
+                        NULLIF(TRIM(rp.category_name), ''),
+                        pc.name,
+                        '未分類'
+                    ) AS category_name
+                FROM pallet_receiving_plans rp
+                LEFT JOIN pallet_categories pc ON pc.id = rp.category_id
+                WHERE
+                    rp.id = ?
+                    AND COALESCE(rp.is_deleted, FALSE) = FALSE
+                LIMIT 1
+                """,
+                (source_id,),
+            ).fetchone()
+
+            if plan is None:
+                raise PalletError("対象の入庫予定が見つかりません。")
+
+            category_name = str(
+                row_value(plan, "category_name", "") or ""
+            ).strip()
+
+            if category_name != "未分類":
+                raise PalletError(
+                    "この入庫予定は未分類ではありません。強制整理を中止しました。"
+                )
+
+            current_batch_code = str(
+                row_value(plan, "batch_code", "") or ""
+            ).strip()
+
+            linked_rows = (
+                inventory_rows_for_batch(current_batch_code, 0)
+                if current_batch_code
+                else []
+            )
+
+            for linked_row in linked_rows:
+                linked_category = str(
+                    row_value(linked_row, "category_name", "") or ""
+                ).strip()
+                if linked_category != "未分類":
+                    raise PalletError(
+                        "この登録には分類済みパレットが混在しています。"
+                        "安全のため強制整理できません。"
+                    )
+
+            removed_qty = sum(
+                int(row_value(row, "current_qty", 0) or 0)
+                for row in linked_rows
+            )
+
+            if current_batch_code:
+                conn.execute(
+                    """
+                    UPDATE pallet_inventory
+                    SET is_deleted = TRUE, updated_at = ?
+                    WHERE
+                        batch_code = ?
+                        AND COALESCE(is_deleted, FALSE) = FALSE
+                    """,
+                    (now, current_batch_code),
+                )
+
+            conn.execute(
+                """
+                UPDATE pallet_receiving_plans
+                SET
+                    status = '取消',
+                    is_deleted = TRUE,
+                    updated_at = ?
+                WHERE
+                    id = ?
+                    AND COALESCE(is_deleted, FALSE) = FALSE
+                """,
+                (now, source_id),
+            )
+
+            conn.commit()
+
+            return (
+                f"未分類の旧登録を整理しました。"
+                f" {len(linked_rows)}パレット / {removed_qty:,}個を"
+                "現在庫対象から除外しました。"
+                " 入出庫履歴データ自体は残しています。"
+            )
+
+        if source_type == "inventory":
+            rows = inventory_rows_for_batch(batch_code, source_id)
+
+            if not rows:
+                raise PalletError("対象の未分類在庫が見つかりません。")
+
+            for row in rows:
+                category_name = str(
+                    row_value(row, "category_name", "") or ""
+                ).strip()
+                if category_name != "未分類":
+                    raise PalletError(
+                        "この登録には分類済みパレットが混在しています。"
+                        "安全のため強制整理できません。"
+                    )
+
+            removed_qty = sum(
+                int(row_value(row, "current_qty", 0) or 0)
+                for row in rows
+            )
+
+            if batch_code:
+                conn.execute(
+                    """
+                    UPDATE pallet_inventory
+                    SET is_deleted = TRUE, updated_at = ?
+                    WHERE
+                        batch_code = ?
+                        AND COALESCE(is_deleted, FALSE) = FALSE
+                    """,
+                    (now, batch_code),
+                )
+                conn.execute(
+                    """
+                    UPDATE pallet_receiving_plans
+                    SET
+                        status = '取消',
+                        is_deleted = TRUE,
+                        updated_at = ?
+                    WHERE
+                        batch_code = ?
+                        AND COALESCE(is_deleted, FALSE) = FALSE
+                    """,
+                    (now, batch_code),
+                )
+            else:
+                conn.execute(
+                    """
+                    UPDATE pallet_inventory
+                    SET is_deleted = TRUE, updated_at = ?
+                    WHERE
+                        id = ?
+                        AND COALESCE(is_deleted, FALSE) = FALSE
+                    """,
+                    (now, source_id),
+                )
+
+            conn.commit()
+
+            return (
+                f"未分類の旧在庫を整理しました。"
+                f" {len(rows)}パレット / {removed_qty:,}個を"
+                "現在庫対象から除外しました。"
+                " 入出庫履歴データ自体は残しています。"
+            )
+
+        raise PalletError("未分類データの区分が不正です。")
+
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        raise
+
+
 # === SHARK UNCLASSIFIED CLEANUP HELPERS END ===
 
 
@@ -1231,10 +1494,6 @@ with tab_register:
 # ============================================================
 with tab_qr:
     st.subheader("QRを読んで入出庫")
-    st.caption(
-        "入庫はA4を1枚ずつ読み取り、読み取ったパレットだけ確定します。"
-        "通常の出庫は1パレット全数です。"
-    )
 
     if st.session_state.simple_qr_flash:
         st.success(st.session_state.simple_qr_flash)
@@ -1247,108 +1506,502 @@ with tab_qr:
         key="simple_qr_operation",
     )
 
-    with st.form("simple_qr_form", clear_on_submit=True):
-        if operation_type == "出庫":
-            shipping_quantity_text = st.text_input(
-                "出庫数（空欄ならパレット全数）",
+    if operation_type == "入庫":
+        st.caption(
+            "A4のQRを1枚ずつ読み取り、"
+            "読み取ったパレットだけ入庫確定します。"
+        )
+
+        with st.form(
+            "simple_qr_receiving_form",
+            clear_on_submit=True,
+        ):
+            qr_code = st.text_input(
+                "QRコード",
                 value="",
-                placeholder="分納するときだけ入力",
+                placeholder="QRを読み取ってEnter",
             )
-        else:
-            shipping_quantity_text = ""
+            qr_submitted = st.form_submit_button(
+                "読み取って入庫",
+                type="primary",
+                use_container_width=True,
+            )
 
-        qr_code = st.text_input(
-            "QRコード",
-            value="",
-            placeholder="QRを読み取ってEnter",
-        )
-        qr_submitted = st.form_submit_button(
-            f"読み取って{operation_type}",
-            type="primary",
-            use_container_width=True,
-        )
+        if qr_submitted:
+            normalized_code = str(
+                qr_code or ""
+            ).strip().upper()
 
-    if qr_submitted:
-        normalized_code = str(qr_code or "").strip().upper()
-
-        if not normalized_code:
-            st.warning("QRコードを読み取ってください。")
-
-        elif operation_type == "入庫":
-            try:
-                result = confirm_receiving_plan(
-                    conn=conn,
-                    receipt_or_pallet_code=normalized_code,
-                    username=username,
-                )
-                st.session_state.simple_qr_flash = (
-                    "パレットナンバー "
-                    f"{int(result['category_sequence']):03d}　"
-                    f"{int(result['received_qty']):,}個 入庫確定"
-                    + (
-                        f"（全{int(result['pallet_count']):,}枚の入庫完了）"
-                        if result["completed"]
-                        else (
-                            "（残り"
-                            f"{int(result['remaining_pallets']):,}枚）"
+            if not normalized_code:
+                st.warning("QRコードを読み取ってください。")
+            else:
+                try:
+                    result = confirm_receiving_plan(
+                        conn=conn,
+                        receipt_or_pallet_code=normalized_code,
+                        username=username,
+                    )
+                    st.session_state.simple_qr_flash = (
+                        "パレットナンバー "
+                        f"{int(result['category_sequence']):03d}　"
+                        f"{int(result['received_qty']):,}個 入庫確定"
+                        + (
+                            f"（全{int(result['pallet_count']):,}枚"
+                            "の入庫完了）"
+                            if result["completed"]
+                            else (
+                                "（残り"
+                                f"{int(result['remaining_pallets']):,}枚）"
+                            )
                         )
                     )
-                )
-                st.rerun()
+                    st.rerun()
 
-            except PalletError as exc:
-                st.error(str(exc))
+                except PalletError as exc:
+                    st.error(str(exc))
 
-            except Exception as exc:
-                st.error(f"入庫中にエラーが発生しました：{exc}")
-
-        else:
-            try:
-                pallet = get_pallet_by_code(
-                    conn=conn,
-                    pallet_code=normalized_code,
-                )
-
-                if pallet is None:
-                    raise PalletError(
-                        "パレットが見つかりません。QRを確認してください。"
+                except Exception as exc:
+                    st.error(
+                        f"入庫中にエラーが発生しました：{exc}"
                     )
 
-                current_qty = int(row_value(pallet, "current_qty", 0))
-                quantity_text = str(
-                    shipping_quantity_text or ""
-                ).replace(",", "").strip()
+    else:
+        st.caption(
+            "①QR読取 → ②今回分を確認 → "
+            "③出庫確定 → ④納品書・受領書"
+        )
+        st.info(
+            "QRを読み取っただけでは在庫は減りません。"
+            "最後の「出庫確定」で今回分を一括処理します。"
+        )
 
-                if quantity_text:
-                    try:
-                        shipping_qty = int(quantity_text)
-                    except ValueError as exc:
-                        raise PalletError(
-                            "出庫数は整数で入力してください。"
-                        ) from exc
-                else:
-                    shipping_qty = current_qty
+        documents = (
+            st.session_state.simple_pallet_out_documents
+        )
 
-                result = ship_pallet(
-                    conn=conn,
-                    pallet_code=normalized_code,
-                    quantity=shipping_qty,
-                    username=username,
+        if documents:
+            st.success(
+                "今回のパレット出庫が完了しました。"
+                "納品書・受領書を保存してください。"
+            )
+
+            confirmed_rows = documents["rows"]
+            confirmed_total = sum(
+                int(row["quantity"])
+                for row in confirmed_rows
+            )
+
+            metric1, metric2, metric3 = st.columns(3)
+            metric1.metric(
+                "荷主",
+                documents["company_name"] or "-",
+            )
+            metric2.metric(
+                "パレット",
+                f"{len(confirmed_rows):,}パレ",
+            )
+            metric3.metric(
+                "出庫数量",
+                f"{confirmed_total:,}個",
+            )
+
+            doc_col1, doc_col2 = st.columns(2)
+
+            with doc_col1:
+                st.download_button(
+                    "📄 納品書をダウンロード",
+                    data=documents["delivery"],
+                    file_name=(
+                        "納品書_パレット_"
+                        f"{documents['stamp']}.pdf"
+                    ),
+                    mime="application/pdf",
+                    use_container_width=True,
                 )
+
+            with doc_col2:
+                st.download_button(
+                    "📄 受領書をダウンロード",
+                    data=documents["receipt"],
+                    file_name=(
+                        "受領書_パレット_"
+                        f"{documents['stamp']}.pdf"
+                    ),
+                    mime="application/pdf",
+                    use_container_width=True,
+                )
+
+            if st.button(
+                "🧹 次の出庫を開始",
+                key="simple_pallet_out_next",
+                use_container_width=True,
+            ):
+                st.session_state.simple_pallet_out_rows = []
+                st.session_state.simple_pallet_out_documents = None
+                st.session_state.simple_pallet_out_company_id = None
+                st.session_state.simple_pallet_out_company_name = ""
                 st.session_state.simple_qr_flash = (
-                    f"管理番号 "
-                    f"{int(row_value(pallet, 'category_sequence', 0)):03d} "
-                    f"を{int(result['shipped_qty']):,}個出庫しました。 "
-                    f"残り：{int(result['after_qty']):,}個"
+                    "新しいパレット出庫を開始しました。"
                 )
                 st.rerun()
 
-            except PalletError as exc:
-                st.error(str(exc))
+        else:
+            form_version = (
+                st.session_state.simple_pallet_out_form_version
+            )
 
-            except Exception as exc:
-                st.error(f"出庫中にエラーが発生しました：{exc}")
+            with st.form(
+                f"simple_pallet_out_scan_{form_version}",
+                clear_on_submit=True,
+            ):
+                shipping_quantity_text = st.text_input(
+                    "出庫数（空欄ならパレット全数）",
+                    value="",
+                    placeholder="分納するときだけ入力",
+                )
+                qr_code = st.text_input(
+                    "QRコード",
+                    value="",
+                    placeholder="QRを読み取ってEnter",
+                )
+                qr_submitted = st.form_submit_button(
+                    "今回の出庫に追加",
+                    type="primary",
+                    use_container_width=True,
+                )
 
+            if qr_submitted:
+                normalized_code = str(
+                    qr_code or ""
+                ).strip().upper()
+
+                if not normalized_code:
+                    st.warning("QRコードを読み取ってください。")
+                else:
+                    try:
+                        pallet = get_pallet_by_code(
+                            conn=conn,
+                            pallet_code=normalized_code,
+                        )
+
+                        if pallet is None:
+                            raise PalletError(
+                                "パレットが見つかりません。"
+                                "QRを確認してください。"
+                            )
+
+                        current_qty = int(
+                            row_value(
+                                pallet,
+                                "current_qty",
+                                0,
+                            )
+                        )
+
+                        if current_qty <= 0:
+                            raise PalletError(
+                                "このパレットは"
+                                "すでに出庫済みです。"
+                            )
+
+                        quantity_text = str(
+                            shipping_quantity_text or ""
+                        ).replace(",", "").strip()
+
+                        if quantity_text:
+                            try:
+                                shipping_qty = int(
+                                    quantity_text
+                                )
+                            except ValueError as exc:
+                                raise PalletError(
+                                    "出庫数は整数で"
+                                    "入力してください。"
+                                ) from exc
+                        else:
+                            shipping_qty = current_qty
+
+                        if shipping_qty <= 0:
+                            raise PalletError(
+                                "出庫数は1以上で"
+                                "入力してください。"
+                            )
+
+                        if shipping_qty > current_qty:
+                            raise PalletError(
+                                f"現在庫は {current_qty:,}個です。"
+                            )
+
+                        staged_rows = list(
+                            st.session_state.simple_pallet_out_rows
+                        )
+
+                        if any(
+                            row["pallet_code"] == normalized_code
+                            for row in staged_rows
+                        ):
+                            raise PalletError(
+                                "このパレットは今回の出庫に"
+                                "すでに追加されています。"
+                            )
+
+                        company_id = int(
+                            row_value(
+                                pallet,
+                                "company_id",
+                                0,
+                            )
+                            or 0
+                        )
+                        company_name = str(
+                            row_value(
+                                pallet,
+                                "company_name",
+                                "",
+                            )
+                            or ""
+                        ).strip()
+
+                        selected_company_id = (
+                            st.session_state
+                            .simple_pallet_out_company_id
+                        )
+
+                        if (
+                            staged_rows
+                            and selected_company_id
+                            not in (None, company_id)
+                        ):
+                            raise PalletError(
+                                "荷主が違います。"
+                                "1枚の納品書・受領書に"
+                                "別荷主は混在できません。"
+                            )
+
+                        staged_rows.append(
+                            {
+                                "pallet_code": normalized_code,
+                                "quantity": shipping_qty,
+                                "company_id": company_id,
+                                "company_name": company_name,
+                                "category_sequence": int(
+                                    row_value(
+                                        pallet,
+                                        "category_sequence",
+                                        0,
+                                    )
+                                    or 0
+                                ),
+                                "category_name": str(
+                                    row_value(
+                                        pallet,
+                                        "category_name",
+                                        "",
+                                    )
+                                    or ""
+                                ).strip(),
+                                "item_code": str(
+                                    row_value(
+                                        pallet,
+                                        "item_code",
+                                        "",
+                                    )
+                                    or ""
+                                ).strip(),
+                                "item_name": str(
+                                    row_value(
+                                        pallet,
+                                        "item_name",
+                                        "",
+                                    )
+                                    or ""
+                                ).strip(),
+                                "current_qty": current_qty,
+                            }
+                        )
+
+                        st.session_state.simple_pallet_out_rows = (
+                            staged_rows
+                        )
+                        st.session_state.simple_pallet_out_company_id = (
+                            company_id
+                        )
+                        st.session_state.simple_pallet_out_company_name = (
+                            company_name
+                        )
+                        st.session_state.simple_pallet_out_form_version += 1
+                        st.session_state.simple_qr_flash = (
+                            f"管理番号 "
+                            f"{int(row_value(pallet, 'category_sequence', 0)):03d} "
+                            f"{shipping_qty:,}個を今回の出庫に追加しました。"
+                        )
+                        st.rerun()
+
+                    except PalletError as exc:
+                        st.error(str(exc))
+
+                    except Exception as exc:
+                        st.error(
+                            "QR確認中にエラーが"
+                            f"発生しました：{exc}"
+                        )
+
+            staged_rows = list(
+                st.session_state.simple_pallet_out_rows
+            )
+
+            if staged_rows:
+                st.divider()
+                st.subheader("今回の出庫")
+
+                staged_total = sum(
+                    int(row["quantity"])
+                    for row in staged_rows
+                )
+
+                metric1, metric2, metric3 = st.columns(3)
+                metric1.metric(
+                    "荷主",
+                    st.session_state
+                    .simple_pallet_out_company_name
+                    or "-",
+                )
+                metric2.metric(
+                    "読取パレット",
+                    f"{len(staged_rows):,}パレ",
+                )
+                metric3.metric(
+                    "出庫数量",
+                    f"{staged_total:,}個",
+                )
+
+                staged_df = pd.DataFrame(
+                    [
+                        {
+                            "管理番号": (
+                                f"{int(row['category_sequence']):03d}"
+                                if int(row["category_sequence"]) > 0
+                                else ""
+                            ),
+                            "大カテゴリー": row["category_name"],
+                            "商品コード": row["item_code"],
+                            "商品名": row["item_name"],
+                            "出庫数": int(row["quantity"]),
+                        }
+                        for row in staged_rows
+                    ]
+                )
+
+                st.dataframe(
+                    staged_df,
+                    hide_index=True,
+                    use_container_width=True,
+                )
+
+                cancel_col, reset_col = st.columns(2)
+
+                with cancel_col:
+                    if st.button(
+                        "↩️ 直前の読取を取り消す",
+                        key="simple_pallet_out_undo",
+                        use_container_width=True,
+                    ):
+                        updated_rows = list(
+                            st.session_state.simple_pallet_out_rows
+                        )
+                        updated_rows.pop()
+                        st.session_state.simple_pallet_out_rows = (
+                            updated_rows
+                        )
+
+                        if not updated_rows:
+                            st.session_state.simple_pallet_out_company_id = (
+                                None
+                            )
+                            st.session_state.simple_pallet_out_company_name = (
+                                ""
+                            )
+
+                        st.rerun()
+
+                with reset_col:
+                    if st.button(
+                        "🗑 読取をすべてリセット",
+                        key="simple_pallet_out_reset",
+                        use_container_width=True,
+                    ):
+                        st.session_state.simple_pallet_out_rows = []
+                        st.session_state.simple_pallet_out_company_id = None
+                        st.session_state.simple_pallet_out_company_name = ""
+                        st.rerun()
+
+                st.write("---")
+
+                if st.button(
+                    (
+                        "✅ "
+                        f"{len(staged_rows):,}パレット / "
+                        f"{staged_total:,}個を出庫確定"
+                    ),
+                    type="primary",
+                    key="simple_pallet_out_confirm",
+                    use_container_width=True,
+                ):
+                    try:
+                        delivery_pdf = (
+                            create_pallet_shipment_document(
+                                "納品書",
+                                staged_rows,
+                                issued_by=display_name,
+                            )
+                        )
+                        receipt_pdf = (
+                            create_pallet_shipment_document(
+                                "受領書",
+                                staged_rows,
+                                issued_by=display_name,
+                            )
+                        )
+
+                        results = ship_pallet_batch(
+                            conn=conn,
+                            shipments=staged_rows,
+                            username=username,
+                        )
+
+                        stamp = datetime.now(JST).strftime(
+                            "%Y%m%d_%H%M%S"
+                        )
+
+                        st.session_state.simple_pallet_out_documents = {
+                            "delivery": delivery_pdf,
+                            "receipt": receipt_pdf,
+                            "rows": staged_rows,
+                            "company_name": (
+                                st.session_state
+                                .simple_pallet_out_company_name
+                            ),
+                            "stamp": stamp,
+                        }
+                        st.session_state.simple_pallet_out_rows = []
+                        st.session_state.simple_qr_flash = (
+                            f"{len(results):,}パレットを"
+                            "出庫確定しました。"
+                        )
+                        st.rerun()
+
+                    except PalletError as exc:
+                        st.error(str(exc))
+
+                    except Exception as exc:
+                        st.error(
+                            "出庫確定中にエラーが"
+                            f"発生しました：{exc}"
+                        )
+            else:
+                st.info(
+                    "まだパレットを読み取っていません。"
+                )
 
 # ============================================================
 # 3. 現在庫
@@ -1819,9 +2472,57 @@ with tab_history:
                                     )
                     else:
                         st.warning(
-                            "このデータは実在庫が残っているため、"
-                            "ここでは取消できません。"
+                            "この未分類データには現在庫が残っています。"
+                            "旧・二重登録だと確認できる場合だけ強制整理できます。"
                         )
+
+                        st.caption(
+                            "強制整理すると、この未分類側を現在庫対象から除外します。"
+                            "分類済みパレットが混在している場合は自動で中止します。"
+                        )
+
+                        with st.form(
+                            "pallet_unclassified_force_cleanup_form"
+                        ):
+                            force_confirm_text = st.text_input(
+                                "確認のため商品名を入力",
+                                key="pallet_unclassified_force_confirm",
+                            )
+                            force_submitted = st.form_submit_button(
+                                "⚠️ この未分類データを強制整理",
+                                type="primary",
+                                use_container_width=True,
+                            )
+
+                        if force_submitted:
+                            expected_name = str(
+                                selected_cleanup["商品名"] or ""
+                            ).strip()
+
+                            if force_confirm_text.strip() != expected_name:
+                                st.warning(
+                                    "商品名が一致しません。"
+                                    "対象の商品名をそのまま入力してください。"
+                                )
+                            else:
+                                try:
+                                    cleanup_message = (
+                                        force_cleanup_unclassified_candidate(
+                                            conn,
+                                            selected_cleanup,
+                                        )
+                                    )
+                                    st.session_state.simple_admin_flash = (
+                                        cleanup_message
+                                    )
+                                    st.rerun()
+                                except PalletError as exc:
+                                    st.error(str(exc))
+                                except Exception as exc:
+                                    st.error(
+                                        "未分類データの強制整理中に"
+                                        f"エラーが発生しました：{exc}"
+                                    )
 
             except Exception as exc:
                 st.error(
