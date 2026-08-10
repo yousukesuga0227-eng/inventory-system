@@ -94,6 +94,7 @@ SESSION_DEFAULTS = {
     "simple_admin_flash": "",
     "simple_admin_pdf": None,
     "simple_admin_pdf_name": "",
+    "simple_admin_action": "",
 }
 
 for session_key, default_value in SESSION_DEFAULTS.items():
@@ -317,6 +318,248 @@ def product_code_stock_dataframe(rows):
     )
 # === SHARK PRODUCT CODE STOCK SUMMARY HELPER END ===
 
+
+# === SHARK PALLET STOCK DASHBOARD HELPERS START ===
+def compact_pallet_dataframe(rows):
+    # 現在保管中のパレットだけを簡潔な表にする。
+    compact_rows = []
+
+    for row in rows:
+        compact_rows.append(
+            {
+                "管理番号": (
+                    f"{int(row_value(row, 'category_sequence', 0)):03d}"
+                ),
+                "商品コード": row_value(row, "item_code", "") or "未採番",
+                "商品名": row_value(row, "item_name", ""),
+                "個数": int(row_value(row, "current_qty", 0)),
+            }
+        )
+
+    compact_rows.sort(
+        key=lambda row: (
+            str(row["商品コード"]),
+            str(row["商品名"]),
+            str(row["管理番号"]),
+        )
+    )
+
+    return pd.DataFrame(
+        compact_rows,
+        columns=[
+            "管理番号",
+            "商品コード",
+            "商品名",
+            "個数",
+        ],
+    )
+
+
+def company_category_stock_dataframe(rows):
+    # 現在庫を荷主×大カテゴリー単位にまとめる。
+    grouped = {}
+
+    for row in rows:
+        company_name = str(
+            row_value(row, "company_name", "") or "荷主未設定"
+        ).strip()
+        category_name = str(
+            row_value(row, "category_name", "") or "未分類"
+        ).strip()
+        current_qty = int(row_value(row, "current_qty", 0))
+
+        key = (
+            company_name.casefold(),
+            category_name.casefold(),
+        )
+
+        if key not in grouped:
+            grouped[key] = {
+                "荷主": company_name,
+                "大カテゴリー": category_name,
+                "現在パレ": 0,
+                "現在個数": 0,
+            }
+
+        grouped[key]["現在パレ"] += 1
+        grouped[key]["現在個数"] += current_qty
+
+    summary = sorted(
+        grouped.values(),
+        key=lambda row: (
+            str(row["荷主"]),
+            str(row["大カテゴリー"]),
+        ),
+    )
+
+    return pd.DataFrame(
+        summary,
+        columns=[
+            "荷主",
+            "大カテゴリー",
+            "現在パレ",
+            "現在個数",
+        ],
+    )
+
+
+def parse_history_datetime(value):
+    # 履歴日時をJST aware datetimeへ変換する。
+    if isinstance(value, datetime):
+        parsed = value
+    else:
+        text = str(value or "").strip()
+
+        if not text:
+            return None
+
+        try:
+            parsed = datetime.fromisoformat(
+                text.replace("Z", "+00:00")
+            )
+        except ValueError:
+            return None
+
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=JST)
+
+    return parsed.astimezone(JST)
+
+
+def daily_pallet_summary_dataframe(rows, days=14, now=None):
+    # 前日19:00超～当日19:00を1締め日として集計する。
+    now = now or datetime.now(JST)
+
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=JST)
+    else:
+        now = now.astimezone(JST)
+
+    events = []
+    all_keys = set()
+
+    for row in rows:
+        event_at = parse_history_datetime(
+            row_value(row, "created_at", "")
+        )
+
+        if event_at is None:
+            continue
+
+        company_name = str(
+            row_value(row, "company_name", "") or "荷主未設定"
+        ).strip()
+        category_name = str(
+            row_value(row, "category_name", "") or "未分類"
+        ).strip()
+        history_type = str(
+            row_value(row, "history_type", "") or ""
+        ).strip()
+        after_qty = int(
+            row_value(row, "after_qty", 0) or 0
+        )
+
+        key = (company_name, category_name)
+        all_keys.add(key)
+
+        events.append(
+            {
+                "at": event_at,
+                "key": key,
+                "type": history_type,
+                "after_qty": after_qty,
+            }
+        )
+
+    today = now.date()
+    days = max(1, int(days))
+    output = []
+
+    for offset in range(days):
+        closing_day = today - timedelta(days=offset)
+        scheduled_cutoff = datetime(
+            closing_day.year,
+            closing_day.month,
+            closing_day.day,
+            19,
+            0,
+            tzinfo=JST,
+        )
+        previous_cutoff = scheduled_cutoff - timedelta(days=1)
+
+        if closing_day == today and now < scheduled_cutoff:
+            effective_cutoff = now
+            status_text = "LIVE"
+        else:
+            effective_cutoff = scheduled_cutoff
+            status_text = "19:00確定"
+
+        for company_name, category_name in sorted(all_keys):
+            key = (company_name, category_name)
+
+            received_pallets = 0
+            shipped_pallets = 0
+            closing_pallets = 0
+
+            for event in events:
+                if event["key"] != key:
+                    continue
+
+                event_at = event["at"]
+                event_type = event["type"]
+                is_full_ship = (
+                    event_type == "出庫"
+                    and event["after_qty"] <= 0
+                )
+
+                if event_at <= effective_cutoff:
+                    if event_type == "入庫":
+                        closing_pallets += 1
+                    elif is_full_ship:
+                        closing_pallets -= 1
+
+                if previous_cutoff < event_at <= effective_cutoff:
+                    if event_type == "入庫":
+                        received_pallets += 1
+                    elif is_full_ship:
+                        shipped_pallets += 1
+
+            closing_pallets = max(0, closing_pallets)
+
+            if (
+                closing_pallets == 0
+                and received_pallets == 0
+                and shipped_pallets == 0
+            ):
+                continue
+
+            output.append(
+                {
+                    "締め日": closing_day.strftime("%Y-%m-%d"),
+                    "状態": status_text,
+                    "荷主": company_name,
+                    "大カテゴリー": category_name,
+                    "入庫パレ": received_pallets,
+                    "出庫パレ": shipped_pallets,
+                    "時点在庫パレ": closing_pallets,
+                }
+            )
+
+    return pd.DataFrame(
+        output,
+        columns=[
+            "締め日",
+            "状態",
+            "荷主",
+            "大カテゴリー",
+            "入庫パレ",
+            "出庫パレ",
+            "時点在庫パレ",
+        ],
+    )
+# === SHARK PALLET STOCK DASHBOARD HELPERS END ===
+
+
 def history_dataframe(rows):
     return pd.DataFrame(
         [
@@ -378,11 +621,279 @@ def numbering_registration_label(registration):
     )
 
 
+
+# === SHARK UNCLASSIFIED CLEANUP HELPERS START ===
+def list_unclassified_cleanup_candidates(conn):
+    candidates = []
+
+    plan_rows = conn.execute(
+        """
+        SELECT
+            rp.id,
+            rp.receipt_code,
+            rp.status,
+            rp.batch_code,
+            c.name AS company_name,
+            COALESCE(NULLIF(rp.item_code, ''), i.code, '') AS item_code,
+            COALESCE(NULLIF(rp.item_name, ''), i.name, '') AS item_name,
+            rp.pallet_count,
+            rp.created_at,
+            (
+                SELECT COUNT(*)
+                FROM pallet_inventory pi
+                WHERE
+                    COALESCE(pi.is_deleted, FALSE) = FALSE
+                    AND COALESCE(pi.batch_code, '') <> ''
+                    AND pi.batch_code = rp.batch_code
+            ) AS linked_inventory_count
+        FROM pallet_receiving_plans rp
+        LEFT JOIN companies c ON c.id = rp.company_id
+        LEFT JOIN items i ON i.id = rp.item_id
+        LEFT JOIN pallet_categories pc ON pc.id = rp.category_id
+        WHERE
+            COALESCE(rp.is_deleted, FALSE) = FALSE
+            AND rp.status <> '取消'
+            AND (
+                COALESCE(NULLIF(TRIM(rp.category_name), ''), pc.name, '未分類')
+                    = '未分類'
+                OR pc.name = '未分類'
+            )
+        ORDER BY rp.created_at DESC, rp.id DESC
+        """
+    ).fetchall()
+
+    for row in plan_rows:
+        linked_count = int(
+            row_value(row, "linked_inventory_count", 0) or 0
+        )
+        candidates.append(
+            {
+                "source_type": "plan",
+                "source_id": int(row_value(row, "id", 0)),
+                "batch_code": str(row_value(row, "batch_code", "") or ""),
+                "区分": "入庫予定",
+                "管理番号": str(row_value(row, "receipt_code", "") or ""),
+                "状態": str(row_value(row, "status", "") or ""),
+                "荷主": str(row_value(row, "company_name", "") or ""),
+                "商品コード": str(row_value(row, "item_code", "") or ""),
+                "商品名": str(row_value(row, "item_name", "") or ""),
+                "パレット数": int(row_value(row, "pallet_count", 0) or 0),
+                "現在個数": 0,
+                "登録日時": format_datetime(row_value(row, "created_at", "")),
+                "can_cancel": linked_count == 0,
+                "理由": (
+                    ""
+                    if linked_count == 0
+                    else "入庫済みパレットが紐づいているため取消不可"
+                ),
+            }
+        )
+
+    inventory_rows = conn.execute(
+        """
+        SELECT
+            MIN(pi.id) AS representative_id,
+            COALESCE(pi.batch_code, '') AS batch_code,
+            c.name AS company_name,
+            COALESCE(NULLIF(pi.item_code, ''), i.code, '') AS item_code,
+            COALESCE(NULLIF(pi.item_name, ''), i.name, '') AS item_name,
+            COUNT(*) AS pallet_count,
+            COALESCE(SUM(pi.current_qty), 0) AS current_qty_total,
+            MIN(pi.created_at) AS created_at
+        FROM pallet_inventory pi
+        LEFT JOIN companies c ON c.id = pi.company_id
+        LEFT JOIN items i ON i.id = pi.item_id
+        LEFT JOIN pallet_categories pc ON pc.id = pi.category_id
+        WHERE
+            COALESCE(pi.is_deleted, FALSE) = FALSE
+            AND (
+                COALESCE(NULLIF(TRIM(pi.category_name), ''), pc.name, '未分類')
+                    = '未分類'
+                OR pc.name = '未分類'
+            )
+        GROUP BY
+            COALESCE(pi.batch_code, ''),
+            c.name,
+            COALESCE(NULLIF(pi.item_code, ''), i.code, ''),
+            COALESCE(NULLIF(pi.item_name, ''), i.name, '')
+        ORDER BY MIN(pi.created_at) DESC, MIN(pi.id) DESC
+        """
+    ).fetchall()
+
+    for row in inventory_rows:
+        current_qty = int(row_value(row, "current_qty_total", 0) or 0)
+        batch_code = str(row_value(row, "batch_code", "") or "").strip()
+        representative_id = int(
+            row_value(row, "representative_id", 0) or 0
+        )
+        candidates.append(
+            {
+                "source_type": "inventory",
+                "source_id": representative_id,
+                "batch_code": batch_code,
+                "区分": "過去在庫",
+                "管理番号": batch_code or f"INV-{representative_id}",
+                "状態": (
+                    "在庫あり"
+                    if current_qty > 0
+                    else "在庫0・整理可能"
+                ),
+                "荷主": str(row_value(row, "company_name", "") or ""),
+                "商品コード": str(row_value(row, "item_code", "") or ""),
+                "商品名": str(row_value(row, "item_name", "") or ""),
+                "パレット数": int(row_value(row, "pallet_count", 0) or 0),
+                "現在個数": current_qty,
+                "登録日時": format_datetime(row_value(row, "created_at", "")),
+                "can_cancel": current_qty <= 0,
+                "理由": (
+                    ""
+                    if current_qty <= 0
+                    else "現在庫が残っているため取消不可"
+                ),
+            }
+        )
+
+    candidates.sort(
+        key=lambda row: (
+            str(row["登録日時"]),
+            str(row["荷主"]),
+            str(row["商品名"]),
+        ),
+        reverse=True,
+    )
+    return candidates
+
+
+def cleanup_unclassified_candidate(conn, candidate):
+    source_type = str(candidate.get("source_type") or "")
+    source_id = int(candidate.get("source_id") or 0)
+    batch_code = str(candidate.get("batch_code") or "").strip()
+    now = datetime.now(JST)
+
+    if source_type == "plan":
+        plan = conn.execute(
+            """
+            SELECT id, batch_code
+            FROM pallet_receiving_plans
+            WHERE
+                id = ?
+                AND COALESCE(is_deleted, FALSE) = FALSE
+            LIMIT 1
+            """,
+            (source_id,),
+        ).fetchone()
+
+        if plan is None:
+            raise PalletError("対象の入庫予定が見つかりません。")
+
+        current_batch_code = str(
+            row_value(plan, "batch_code", "") or ""
+        ).strip()
+
+        linked_count = 0
+        if current_batch_code:
+            linked_row = conn.execute(
+                """
+                SELECT COUNT(*) AS count_value
+                FROM pallet_inventory
+                WHERE
+                    batch_code = ?
+                    AND COALESCE(is_deleted, FALSE) = FALSE
+                """,
+                (current_batch_code,),
+            ).fetchone()
+            linked_count = int(
+                row_value(linked_row, "count_value", 0) or 0
+            )
+
+        if linked_count > 0:
+            raise PalletError(
+                "この登録には入庫済みパレットが紐づいているため取消できません。"
+            )
+
+        conn.execute(
+            """
+            UPDATE pallet_receiving_plans
+            SET status = '取消', updated_at = ?
+            WHERE
+                id = ?
+                AND COALESCE(is_deleted, FALSE) = FALSE
+            """,
+            (now, source_id),
+        )
+        conn.commit()
+        return "未分類の入庫予定を取消しました。"
+
+    if source_type == "inventory":
+        if batch_code:
+            stock_row = conn.execute(
+                """
+                SELECT COALESCE(SUM(current_qty), 0) AS current_qty_total
+                FROM pallet_inventory
+                WHERE
+                    batch_code = ?
+                    AND COALESCE(is_deleted, FALSE) = FALSE
+                """,
+                (batch_code,),
+            ).fetchone()
+        else:
+            stock_row = conn.execute(
+                """
+                SELECT COALESCE(SUM(current_qty), 0) AS current_qty_total
+                FROM pallet_inventory
+                WHERE
+                    id = ?
+                    AND COALESCE(is_deleted, FALSE) = FALSE
+                """,
+                (source_id,),
+            ).fetchone()
+
+        current_qty = int(
+            row_value(stock_row, "current_qty_total", 0) or 0
+        )
+        if current_qty > 0:
+            raise PalletError(
+                f"現在庫が {current_qty:,} 個残っているため取消できません。"
+            )
+
+        if batch_code:
+            conn.execute(
+                """
+                UPDATE pallet_inventory
+                SET is_deleted = TRUE, updated_at = ?
+                WHERE
+                    batch_code = ?
+                    AND COALESCE(is_deleted, FALSE) = FALSE
+                """,
+                (now, batch_code),
+            )
+        else:
+            conn.execute(
+                """
+                UPDATE pallet_inventory
+                SET is_deleted = TRUE, updated_at = ?
+                WHERE
+                    id = ?
+                    AND COALESCE(is_deleted, FALSE) = FALSE
+                """,
+                (now, source_id),
+            )
+
+        conn.commit()
+        return (
+            "在庫0の未分類データを採番対象から除外しました。"
+            "入出庫履歴は残しています。"
+        )
+
+    raise PalletError("未分類データの区分が不正です。")
+# === SHARK UNCLASSIFIED CLEANUP HELPERS END ===
+
+
 # ============================================================
 # 4つだけの通常画面
 # ============================================================
-tab_register, tab_qr, tab_stock, tab_history = st.tabs(
-    ["登録・印刷", "QR入出庫", "現在庫", "履歴"]
+tab_register, tab_qr, tab_stock, tab_daily, tab_history = st.tabs(
+    ["登録・印刷", "QR入出庫", "現在庫", "日次集計", "履歴"]
 )
 
 
@@ -842,20 +1353,20 @@ with tab_qr:
 # ============================================================
 # 3. 現在庫
 # ============================================================
-# === SHARK PRODUCT CODE STOCK SUMMARY UI START ===
 with tab_stock:
     st.subheader("現在庫")
+    st.caption(
+        "今この時点で保管しているパレットを、荷主・大カテゴリー別に表示します。"
+    )
 
     stock_search = st.text_input(
         "検索",
         placeholder=(
-            "顧客名・大カテゴリー・商品コード・商品名・管理番号"
+            "荷主・大カテゴリー・商品コード・商品名・管理番号"
         ),
         key="simple_stock_search",
     )
 
-    # 商品コード検索を確実に効かせるため、保管中データを取得して
-    # 画面側で商品コードを含む全項目を検索する。
     all_stock_rows = list_pallet_stock(
         conn=conn,
         status="保管中",
@@ -866,70 +1377,232 @@ with tab_stock:
         for row in all_stock_rows
         if stock_row_matches(row, stock_search)
     ]
-    product_stock_df = product_code_stock_dataframe(stock_rows)
+
+    stock_summary_df = company_category_stock_dataframe(stock_rows)
     total_current_qty = sum(
         int(row_value(row, "current_qty", 0))
         for row in stock_rows
     )
-    uncoded_pallet_count = sum(
-        not str(row_value(row, "item_code", "") or "").strip()
-        for row in stock_rows
+    company_count = len(
+        {
+            str(row_value(row, "company_name", "") or "荷主未設定")
+            for row in stock_rows
+        }
     )
 
     metric_col1, metric_col2, metric_col3 = st.columns(3)
 
     with metric_col1:
-        st.metric(
-            "商品種類",
-            f"{len(product_stock_df):,}種類",
-        )
+        st.metric("荷主数", f"{company_count:,}社")
 
     with metric_col2:
-        st.metric(
-            "保管中パレット",
-            f"{len(stock_rows):,}枚",
-        )
+        st.metric("現在パレット", f"{len(stock_rows):,}パレ")
 
     with metric_col3:
-        st.metric(
-            "現在庫合計",
-            f"{total_current_qty:,}個",
-        )
+        st.metric("現在庫合計", f"{total_current_qty:,}個")
 
     if not stock_rows:
         st.info("該当する現在庫はありません。")
     else:
-        st.subheader("商品コード別の現在庫")
-        st.caption(
-            "同じ商品コードの保管中パレットをまとめて、"
-            "現在庫の合計数を表示しています。"
-        )
+        st.subheader("荷主・大カテゴリー別")
         st.dataframe(
-            product_stock_df,
+            stock_summary_df,
             hide_index=True,
             use_container_width=True,
+            column_config={
+                "現在パレ": st.column_config.NumberColumn(
+                    "現在パレ",
+                    format="%d パレ",
+                ),
+                "現在個数": st.column_config.NumberColumn(
+                    "現在個数",
+                    format="%d 個",
+                ),
+            },
         )
 
-        if uncoded_pallet_count:
-            st.warning(
-                "商品コード未採番の保管中パレットが "
-                f"{uncoded_pallet_count:,}枚あります。"
-                "管理メニューの既存商品採番を確認してください。"
+        st.divider()
+        st.subheader("パレット内訳")
+        st.caption(
+            "履歴ではなく、現在保管しているパレットだけを表示します。"
+        )
+
+        company_options = sorted(
+            {
+                str(
+                    row_value(row, "company_name", "")
+                    or "荷主未設定"
+                ).strip()
+                for row in stock_rows
+            }
+        )
+
+        selected_company = st.selectbox(
+            "荷主",
+            options=company_options,
+            key="simple_stock_company",
+        )
+
+        company_rows = [
+            row
+            for row in stock_rows
+            if str(
+                row_value(row, "company_name", "")
+                or "荷主未設定"
+            ).strip()
+            == selected_company
+        ]
+
+        category_options = sorted(
+            {
+                str(
+                    row_value(row, "category_name", "")
+                    or "未分類"
+                ).strip()
+                for row in company_rows
+            }
+        )
+
+        selected_category = st.selectbox(
+            "大カテゴリー",
+            options=category_options,
+            key="simple_stock_category",
+        )
+
+        detail_rows = [
+            row
+            for row in company_rows
+            if str(
+                row_value(row, "category_name", "")
+                or "未分類"
+            ).strip()
+            == selected_category
+        ]
+
+        detail_col1, detail_col2 = st.columns(2)
+
+        with detail_col1:
+            st.metric(
+                f"{selected_company} / {selected_category}",
+                f"{len(detail_rows):,}パレ",
             )
 
-        with st.expander(
-            "パレット別の内訳を見る",
-            expanded=False,
-        ):
-            st.dataframe(
-                stock_dataframe(stock_rows),
-                hide_index=True,
-                use_container_width=True,
+        with detail_col2:
+            st.metric(
+                "商品個数",
+                (
+                    f"{sum(int(row_value(row, 'current_qty', 0)) for row in detail_rows):,}"
+                    "個"
+                ),
             )
+
+        st.dataframe(
+            compact_pallet_dataframe(detail_rows),
+            hide_index=True,
+            use_container_width=True,
+            column_config={
+                "個数": st.column_config.NumberColumn(
+                    "個数",
+                    format="%d 個",
+                ),
+            },
+        )
 
 
 # ============================================================
-# 4. 履歴
+# 4. 日次集計
+# ============================================================
+with tab_daily:
+    st.subheader("日次集計")
+    st.caption(
+        "前日19:00超～当日19:00までを1日として集計します。"
+        "今日が19:00前なら現在時刻までをLIVE表示します。"
+    )
+
+    daily_days = st.selectbox(
+        "表示期間",
+        options=[7, 14, 30],
+        index=1,
+        format_func=lambda value: f"直近 {value} 日",
+        key="simple_daily_days",
+    )
+
+    daily_history_rows = list_pallet_history(
+        conn=conn,
+        history_type="すべて",
+        limit=50000,
+    )
+    daily_df = daily_pallet_summary_dataframe(
+        daily_history_rows,
+        days=int(daily_days),
+        now=datetime.now(JST),
+    )
+
+    today_text = datetime.now(JST).date().strftime("%Y-%m-%d")
+    today_df = (
+        daily_df[daily_df["締め日"] == today_text]
+        if not daily_df.empty
+        else pd.DataFrame()
+    )
+
+    daily_metric1, daily_metric2, daily_metric3 = st.columns(3)
+
+    with daily_metric1:
+        st.metric(
+            "本日入庫",
+            (
+                f"{int(today_df['入庫パレ'].sum()):,}パレ"
+                if not today_df.empty
+                else "0パレ"
+            ),
+        )
+
+    with daily_metric2:
+        st.metric(
+            "本日出庫",
+            (
+                f"{int(today_df['出庫パレ'].sum()):,}パレ"
+                if not today_df.empty
+                else "0パレ"
+            ),
+        )
+
+    with daily_metric3:
+        st.metric(
+            "現在 / 19時時点",
+            (
+                f"{int(today_df['時点在庫パレ'].sum()):,}パレ"
+                if not today_df.empty
+                else "0パレ"
+            ),
+        )
+
+    if daily_df.empty:
+        st.info("日次集計できる履歴がありません。")
+    else:
+        st.dataframe(
+            daily_df,
+            hide_index=True,
+            use_container_width=True,
+            column_config={
+                "入庫パレ": st.column_config.NumberColumn(
+                    "入庫パレ",
+                    format="%d パレ",
+                ),
+                "出庫パレ": st.column_config.NumberColumn(
+                    "出庫パレ",
+                    format="%d パレ",
+                ),
+                "時点在庫パレ": st.column_config.NumberColumn(
+                    "時点在庫パレ",
+                    format="%d パレ",
+                ),
+            },
+        )
+
+
+# ============================================================
+# 5. 履歴
 # ============================================================
 with tab_history:
     st.subheader("入出庫履歴")
@@ -958,15 +1631,204 @@ with tab_history:
     st.divider()
 
     # 通常作業から修正・削除を隔離する。
-    with st.expander("管理メニュー（再印刷・取消・誤登録修正）"):
+    with st.expander(
+        "管理メニュー",
+        expanded=bool(st.session_state.simple_admin_action),
+    ):
         st.caption(
-            "通常の入出庫では使いません。誤登録のときだけ開いてください。"
+            "通常の入出庫では使いません。必要な管理操作だけ選んでください。"
         )
 
-        with st.expander(
-            "商品コード管理（カテゴリーコード・既存商品の一括採番）",
-            expanded=False,
-        ):
+        admin_col1, admin_col2, admin_col3, admin_col4 = st.columns(4)
+
+        with admin_col1:
+            if st.button(
+                "🏷️ 商品コード管理",
+                key="simple_admin_menu_item_code",
+                type=(
+                    "primary"
+                    if st.session_state.simple_admin_action
+                    == "商品コード管理"
+                    else "secondary"
+                ),
+                use_container_width=True,
+            ):
+                st.session_state.simple_admin_action = "商品コード管理"
+                st.rerun()
+
+        with admin_col2:
+            if st.button(
+                "🔢 採番管理",
+                key="simple_admin_menu_numbering",
+                type=(
+                    "primary"
+                    if st.session_state.simple_admin_action
+                    == "採番管理"
+                    else "secondary"
+                ),
+                use_container_width=True,
+            ):
+                st.session_state.simple_admin_action = "採番管理"
+                st.rerun()
+
+        with admin_col3:
+            if st.button(
+                "🖨️ 入庫待ち",
+                key="simple_admin_menu_pending",
+                type=(
+                    "primary"
+                    if st.session_state.simple_admin_action
+                    == "入庫待ち"
+                    else "secondary"
+                ),
+                use_container_width=True,
+            ):
+                st.session_state.simple_admin_action = "入庫待ち"
+                st.rerun()
+
+        with admin_col4:
+            if st.button(
+                "✏️ 登録内容修正",
+                key="simple_admin_menu_edit",
+                type=(
+                    "primary"
+                    if st.session_state.simple_admin_action
+                    == "登録内容修正"
+                    else "secondary"
+                ),
+                use_container_width=True,
+            ):
+                st.session_state.simple_admin_action = "登録内容修正"
+                st.rerun()
+
+        if not st.session_state.simple_admin_action:
+            st.info(
+                "上のボタンから、やりたい管理操作を選んでください。"
+            )
+        else:
+            st.caption(
+                f"選択中：{st.session_state.simple_admin_action}"
+            )
+
+        if st.session_state.simple_admin_action == "商品コード管理":
+            st.subheader("🏷️ 商品コード管理")
+            st.caption(
+                "大カテゴリーコード設定と既存商品の商品コード採番を行います。"
+            )
+            st.divider()
+            st.subheader("🧹 未分類データ整理")
+            st.caption(
+                "商品コード管理に残る未分類データの元を確認して、"
+                "実在庫が無いものだけ手動で取消できます。"
+            )
+
+            try:
+                cleanup_candidates = (
+                    list_unclassified_cleanup_candidates(conn)
+                )
+
+                if not cleanup_candidates:
+                    st.success(
+                        "整理が必要な未分類データはありません。"
+                    )
+                else:
+                    cleanup_df = pd.DataFrame(
+                        [
+                            {
+                                "区分": row["区分"],
+                                "管理番号": row["管理番号"],
+                                "状態": row["状態"],
+                                "荷主": row["荷主"],
+                                "商品コード": row["商品コード"],
+                                "商品名": row["商品名"],
+                                "パレット数": row["パレット数"],
+                                "現在個数": row["現在個数"],
+                                "登録日時": row["登録日時"],
+                                "取消可否": (
+                                    "取消可"
+                                    if row["can_cancel"]
+                                    else "保護"
+                                ),
+                                "理由": row["理由"],
+                            }
+                            for row in cleanup_candidates
+                        ]
+                    )
+                    st.dataframe(
+                        cleanup_df,
+                        hide_index=True,
+                        use_container_width=True,
+                    )
+
+                    cleanup_map = {
+                        (
+                            f"{row['区分']}｜{row['管理番号']}｜"
+                            f"{row['荷主']}｜{row['商品名']}｜"
+                            f"{row['状態']}"
+                        ): row
+                        for row in cleanup_candidates
+                    }
+
+                    selected_cleanup_label = st.selectbox(
+                        "手動取消するデータ",
+                        options=list(cleanup_map.keys()),
+                        key="pallet_unclassified_cleanup_target",
+                    )
+                    selected_cleanup = cleanup_map[
+                        selected_cleanup_label
+                    ]
+
+                    if selected_cleanup["can_cancel"]:
+                        with st.form(
+                            "pallet_unclassified_cleanup_form"
+                        ):
+                            cleanup_confirmed = st.checkbox(
+                                "この未分類データを手動取消する"
+                            )
+                            cleanup_submitted = (
+                                st.form_submit_button(
+                                    "未分類データを取消",
+                                    type="primary",
+                                    use_container_width=True,
+                                )
+                            )
+
+                        if cleanup_submitted:
+                            if not cleanup_confirmed:
+                                st.warning(
+                                    "確認にチェックを入れてください。"
+                                )
+                            else:
+                                try:
+                                    cleanup_message = (
+                                        cleanup_unclassified_candidate(
+                                            conn,
+                                            selected_cleanup,
+                                        )
+                                    )
+                                    st.session_state.simple_admin_flash = (
+                                        cleanup_message
+                                    )
+                                    st.rerun()
+                                except PalletError as exc:
+                                    st.error(str(exc))
+                                except Exception as exc:
+                                    st.error(
+                                        "未分類データの取消中に"
+                                        f"エラーが発生しました：{exc}"
+                                    )
+                    else:
+                        st.warning(
+                            "このデータは実在庫が残っているため、"
+                            "ここでは取消できません。"
+                        )
+
+            except Exception as exc:
+                st.error(
+                    "未分類データの確認中にエラーが発生しました："
+                    f"{exc}"
+                )
+
             st.caption(
                 "商品コード形式：顧客コード-大カテゴリーコード-"
                 "初回登録年月-4桁連番"
@@ -1096,10 +1958,11 @@ with tab_history:
                 use_container_width=True,
             )
 
-        with st.expander(
-            "採番管理（登録済み番号・次回開始番号）",
-            expanded=False,
-        ):
+        if st.session_state.simple_admin_action == "採番管理":
+            st.subheader("🔢 採番管理")
+            st.caption(
+                "登録済み管理番号と次回開始番号を変更します。"
+            )
             st.caption(
                 "管理番号だけを変更します。QRコードは変わりません。"
                 "複数パレットは開始番号から連番のまま移動します。"
@@ -1369,325 +2232,297 @@ with tab_history:
                                 f"発生しました：{exc}"
                             )
 
-        st.divider()
-        st.write("入庫待ちのA4再印刷・取消")
-        pending_plans = list_receiving_plans(
-            conn,
-            status="入庫待ち",
-        )
-
-        if not pending_plans:
-            st.info("入庫待ちはありません。")
-        else:
-            pending_map = {
-                pending_plan_label(plan): plan
-                for plan in pending_plans
-            }
-            selected_pending_label = st.selectbox(
-                "入庫待ちを選択",
-                options=list(pending_map.keys()),
-                key="simple_admin_pending",
+        if st.session_state.simple_admin_action == "入庫待ち":
+            st.subheader("🖨️ 入庫待ち")
+            st.caption(
+                "入庫待ちA4の再印刷または登録取消を行います。"
             )
-            selected_pending = pending_map[selected_pending_label]
-            selected_pending_code = str(
-                row_value(selected_pending, "receipt_code", "")
-            )
-            pending_pdf = create_receiving_plan_a4_pdf(
-                [selected_pending]
+            st.divider()
+            st.write("入庫待ちのA4再印刷・取消")
+            pending_plans = list_receiving_plans(
+                conn,
+                status="入庫待ち",
             )
 
-            st.download_button(
-                "選択したA4を再印刷",
-                data=pending_pdf,
-                file_name=f"receiving_{selected_pending_code}.pdf",
-                mime="application/pdf",
-                use_container_width=True,
-            )
-
-            with st.form("simple_admin_cancel_pending"):
-                cancel_checked = st.checkbox(
-                    f"{selected_pending_code} を取り消す"
+            if not pending_plans:
+                st.info("入庫待ちはありません。")
+            else:
+                pending_map = {
+                    pending_plan_label(plan): plan
+                    for plan in pending_plans
+                }
+                selected_pending_label = st.selectbox(
+                    "入庫待ちを選択",
+                    options=list(pending_map.keys()),
+                    key="simple_admin_pending",
                 )
-                cancel_submitted = st.form_submit_button(
-                    "入庫待ちを取消",
+                selected_pending = pending_map[selected_pending_label]
+                selected_pending_code = str(
+                    row_value(selected_pending, "receipt_code", "")
+                )
+                pending_pdf = create_receiving_plan_a4_pdf(
+                    [selected_pending]
+                )
+
+                st.download_button(
+                    "選択したA4を再印刷",
+                    data=pending_pdf,
+                    file_name=f"receiving_{selected_pending_code}.pdf",
+                    mime="application/pdf",
                     use_container_width=True,
                 )
 
-            if cancel_submitted:
-                if not cancel_checked:
-                    st.warning("取消確認にチェックを入れてください。")
-                else:
-                    try:
-                        cancel_receiving_plan(
-                            conn,
-                            selected_pending_code,
-                        )
-                        st.session_state.simple_admin_flash = (
-                            f"{selected_pending_code} を取り消しました。"
-                        )
-                        st.rerun()
-                    except PalletError as exc:
-                        st.error(str(exc))
-
-        st.divider()
-        st.write("入庫済み・未出庫データの修正")
-        editable_batches = list_editable_pallet_batches(conn)
-
-        if not editable_batches:
-            st.info("修正できる未出庫データはありません。")
-        else:
-            editable_map = {
-                editable_batch_label(batch): batch
-                for batch in editable_batches
-            }
-            selected_edit_label = st.selectbox(
-                "修正する登録を選択",
-                options=list(editable_map.keys()),
-                key="simple_admin_edit_batch",
-            )
-            selected_batch = editable_map[selected_edit_label]
-            selected_batch_code = str(
-                row_value(selected_batch, "batch_code", "")
-            )
-            edit_pallets = get_batch_pallets(
-                conn,
-                selected_batch_code,
-            )
-
-            if not edit_pallets:
-                st.warning("対象が更新されています。画面を更新してください。")
-            else:
-                edit_companies = conn.execute(
-                    """
-                    SELECT id, code, name
-                    FROM companies
-                    ORDER BY code, name
-                    """
-                ).fetchall()
-                edit_company_map = company_option_map(edit_companies)
-                edit_company_labels = list(edit_company_map.keys())
-                current_company_id = int(
-                    row_value(edit_pallets[0], "company_id", 0)
-                )
-                current_company_index = next(
-                    (
-                        index
-                        for index, label in enumerate(edit_company_labels)
-                        if edit_company_map[label]["id"]
-                        == current_company_id
-                    ),
-                    0,
-                )
-
-                current_category_name = str(
-                    row_value(
-                        edit_pallets[0],
-                        "category_name",
-                        "未分類",
+                with st.form("simple_admin_cancel_pending"):
+                    cancel_checked = st.checkbox(
+                        f"{selected_pending_code} を取り消す"
                     )
-                    or "未分類"
-                ).strip()
-                category_is_unclassified = current_category_name in (
-                    "",
-                    "未分類",
-                )
-                editable_category_map = {
-                    str(row_value(category, "name", "")): int(
-                        row_value(category, "id", 0)
-                    )
-                    for category in list_pallet_categories(conn)
-                    if str(row_value(category, "name", "")).strip()
-                    not in ("", "未分類")
-                }
-
-                allocation_rows = [
-                    {
-                        "管理番号": (
-                            f"{int(row_value(pallet, 'category_sequence', 0)):03d}"
-                        ),
-                        "個数": int(
-                            row_value(pallet, "initial_qty", 0)
-                        ),
-                    }
-                    for pallet in edit_pallets
-                ]
-
-                with st.form(
-                    f"simple_admin_edit_form_{selected_batch_code}"
-                ):
-                    edit_company_label = st.selectbox(
-                        "業者名",
-                        options=edit_company_labels,
-                        index=current_company_index,
-                    )
-
-                    if category_is_unclassified:
-                        category_options = ["未分類のまま"] + list(
-                            editable_category_map.keys()
-                        )
-                        edit_category_label = st.selectbox(
-                            "大カテゴリー",
-                            options=category_options,
-                        )
-                    else:
-                        st.text_input(
-                            "大カテゴリー",
-                            value=current_category_name,
-                            disabled=True,
-                        )
-                        edit_category_label = ""
-
-                    item_col1, item_col2 = st.columns(2)
-
-                    with item_col1:
-                        edit_item_code = st.text_input(
-                            "商品コード（任意）",
-                            value=str(
-                                row_value(
-                                    edit_pallets[0],
-                                    "item_code",
-                                    "",
-                                )
-                                or ""
-                            ),
-                        )
-
-                    with item_col2:
-                        edit_item_name = st.text_input(
-                            "商品名",
-                            value=str(
-                                row_value(
-                                    edit_pallets[0],
-                                    "item_name",
-                                    "",
-                                )
-                                or ""
-                            ),
-                        )
-
-                    edited_allocations = st.data_editor(
-                        pd.DataFrame(allocation_rows),
-                        hide_index=True,
-                        use_container_width=True,
-                        num_rows="fixed",
-                        key=(
-                            "simple_admin_allocations_"
-                            f"{selected_batch_code}"
-                        ),
-                        column_config={
-                            "管理番号": st.column_config.TextColumn(
-                                "管理番号",
-                                disabled=True,
-                            ),
-                            "個数": st.column_config.NumberColumn(
-                                "商品数",
-                                min_value=0,
-                                max_value=1_000_000,
-                                step=1,
-                                required=True,
-                                format="%d 個",
-                            ),
-                        },
-                    )
-                    update_submitted = st.form_submit_button(
-                        "変更を保存",
-                        type="primary",
+                    cancel_submitted = st.form_submit_button(
+                        "入庫待ちを取消",
                         use_container_width=True,
                     )
 
-                if update_submitted:
-                    try:
-                        normalized_edit_name = str(
-                            edit_item_name or ""
-                        ).strip()
-
-                        if not normalized_edit_name:
-                            raise PalletError("商品名を入力してください。")
-
-                        selected_category_id = None
-
-                        if (
-                            category_is_unclassified
-                            and edit_category_label != "未分類のまま"
-                        ):
-                            selected_category_id = editable_category_map[
-                                edit_category_label
-                            ]
-
-                        edited_allocations["個数"] = (
-                            pd.to_numeric(
-                                edited_allocations["個数"],
-                                errors="coerce",
-                            )
-                            .fillna(0)
-                            .astype(int)
-                        )
-                        result = update_pallet_batch(
-                            conn=conn,
-                            batch_code=selected_batch_code,
-                            company_id=edit_company_map[
-                                edit_company_label
-                            ]["id"],
-                            project_id=None,
-                            item_id=None,
-                            allocations=edited_allocations.to_dict(
-                                "records"
-                            ),
-                            item_code=str(edit_item_code or "").strip(),
-                            item_name=normalized_edit_name,
-                            category_id=selected_category_id,
-                        )
-                        revised_pallets = get_batch_pallets(
-                            conn,
-                            selected_batch_code,
-                        )
-                        st.session_state.simple_admin_pdf = (
-                            create_pallet_a4_pdf(revised_pallets)
-                        )
-                        st.session_state.simple_admin_pdf_name = (
-                            f"pallet_{selected_batch_code}.pdf"
-                        )
-                        st.session_state.simple_admin_flash = (
-                            "変更しました。 "
-                            f"商品総数：{int(result['total_qty']):,}個"
-                        )
-                        st.rerun()
-
-                    except PalletError as exc:
-                        st.error(str(exc))
-
-                    except Exception as exc:
-                        st.error(
-                            "変更中にエラーが発生しました："
-                            f"{exc}"
-                        )
-
-                st.write("誤登録の削除")
-
-                with st.form(
-                    f"simple_admin_delete_form_{selected_batch_code}"
-                ):
-                    delete_checked = st.checkbox(
-                        f"{selected_batch_code} を削除する"
-                    )
-                    delete_submitted = st.form_submit_button(
-                        "登録を削除",
-                        use_container_width=True,
-                    )
-
-                if delete_submitted:
-                    if not delete_checked:
-                        st.warning("削除確認にチェックを入れてください。")
+                if cancel_submitted:
+                    if not cancel_checked:
+                        st.warning("取消確認にチェックを入れてください。")
                     else:
                         try:
-                            delete_pallet_batch(
+                            cancel_receiving_plan(
+                                conn,
+                                selected_pending_code,
+                            )
+                            st.session_state.simple_admin_flash = (
+                                f"{selected_pending_code} を取り消しました。"
+                            )
+                            st.rerun()
+                        except PalletError as exc:
+                            st.error(str(exc))
+
+        if st.session_state.simple_admin_action == "登録内容修正":
+            st.subheader("✏️ 登録内容修正")
+            st.caption(
+                "入庫済み・未出庫データの修正や誤登録削除を行います。"
+            )
+            st.divider()
+            st.write("入庫済み・未出庫データの修正")
+            editable_batches = list_editable_pallet_batches(conn)
+
+            if not editable_batches:
+                st.info("修正できる未出庫データはありません。")
+            else:
+                editable_map = {
+                    editable_batch_label(batch): batch
+                    for batch in editable_batches
+                }
+                selected_edit_label = st.selectbox(
+                    "修正する登録を選択",
+                    options=list(editable_map.keys()),
+                    key="simple_admin_edit_batch",
+                )
+                selected_batch = editable_map[selected_edit_label]
+                selected_batch_code = str(
+                    row_value(selected_batch, "batch_code", "")
+                )
+                edit_pallets = get_batch_pallets(
+                    conn,
+                    selected_batch_code,
+                )
+
+                if not edit_pallets:
+                    st.warning("対象が更新されています。画面を更新してください。")
+                else:
+                    edit_companies = conn.execute(
+                        """
+                        SELECT id, code, name
+                        FROM companies
+                        ORDER BY code, name
+                        """
+                    ).fetchall()
+                    edit_company_map = company_option_map(edit_companies)
+                    edit_company_labels = list(edit_company_map.keys())
+                    current_company_id = int(
+                        row_value(edit_pallets[0], "company_id", 0)
+                    )
+                    current_company_index = next(
+                        (
+                            index
+                            for index, label in enumerate(edit_company_labels)
+                            if edit_company_map[label]["id"]
+                            == current_company_id
+                        ),
+                        0,
+                    )
+
+                    current_category_name = str(
+                        row_value(
+                            edit_pallets[0],
+                            "category_name",
+                            "未分類",
+                        )
+                        or "未分類"
+                    ).strip()
+                    category_is_unclassified = current_category_name in (
+                        "",
+                        "未分類",
+                    )
+                    editable_category_map = {
+                        str(row_value(category, "name", "")): int(
+                            row_value(category, "id", 0)
+                        )
+                        for category in list_pallet_categories(conn)
+                        if str(row_value(category, "name", "")).strip()
+                        not in ("", "未分類")
+                    }
+
+                    allocation_rows = [
+                        {
+                            "管理番号": (
+                                f"{int(row_value(pallet, 'category_sequence', 0)):03d}"
+                            ),
+                            "個数": int(
+                                row_value(pallet, "initial_qty", 0)
+                            ),
+                        }
+                        for pallet in edit_pallets
+                    ]
+
+                    with st.form(
+                        f"simple_admin_edit_form_{selected_batch_code}"
+                    ):
+                        edit_company_label = st.selectbox(
+                            "業者名",
+                            options=edit_company_labels,
+                            index=current_company_index,
+                        )
+
+                        if category_is_unclassified:
+                            category_options = ["未分類のまま"] + list(
+                                editable_category_map.keys()
+                            )
+                            edit_category_label = st.selectbox(
+                                "大カテゴリー",
+                                options=category_options,
+                            )
+                        else:
+                            st.text_input(
+                                "大カテゴリー",
+                                value=current_category_name,
+                                disabled=True,
+                            )
+                            edit_category_label = ""
+
+                        item_col1, item_col2 = st.columns(2)
+
+                        with item_col1:
+                            edit_item_code = st.text_input(
+                                "商品コード（任意）",
+                                value=str(
+                                    row_value(
+                                        edit_pallets[0],
+                                        "item_code",
+                                        "",
+                                    )
+                                    or ""
+                                ),
+                            )
+
+                        with item_col2:
+                            edit_item_name = st.text_input(
+                                "商品名",
+                                value=str(
+                                    row_value(
+                                        edit_pallets[0],
+                                        "item_name",
+                                        "",
+                                    )
+                                    or ""
+                                ),
+                            )
+
+                        edited_allocations = st.data_editor(
+                            pd.DataFrame(allocation_rows),
+                            hide_index=True,
+                            use_container_width=True,
+                            num_rows="fixed",
+                            key=(
+                                "simple_admin_allocations_"
+                                f"{selected_batch_code}"
+                            ),
+                            column_config={
+                                "管理番号": st.column_config.TextColumn(
+                                    "管理番号",
+                                    disabled=True,
+                                ),
+                                "個数": st.column_config.NumberColumn(
+                                    "商品数",
+                                    min_value=0,
+                                    max_value=1_000_000,
+                                    step=1,
+                                    required=True,
+                                    format="%d 個",
+                                ),
+                            },
+                        )
+                        update_submitted = st.form_submit_button(
+                            "変更を保存",
+                            type="primary",
+                            use_container_width=True,
+                        )
+
+                    if update_submitted:
+                        try:
+                            normalized_edit_name = str(
+                                edit_item_name or ""
+                            ).strip()
+
+                            if not normalized_edit_name:
+                                raise PalletError("商品名を入力してください。")
+
+                            selected_category_id = None
+
+                            if (
+                                category_is_unclassified
+                                and edit_category_label != "未分類のまま"
+                            ):
+                                selected_category_id = editable_category_map[
+                                    edit_category_label
+                                ]
+
+                            edited_allocations["個数"] = (
+                                pd.to_numeric(
+                                    edited_allocations["個数"],
+                                    errors="coerce",
+                                )
+                                .fillna(0)
+                                .astype(int)
+                            )
+                            result = update_pallet_batch(
+                                conn=conn,
+                                batch_code=selected_batch_code,
+                                company_id=edit_company_map[
+                                    edit_company_label
+                                ]["id"],
+                                project_id=None,
+                                item_id=None,
+                                allocations=edited_allocations.to_dict(
+                                    "records"
+                                ),
+                                item_code=str(edit_item_code or "").strip(),
+                                item_name=normalized_edit_name,
+                                category_id=selected_category_id,
+                            )
+                            revised_pallets = get_batch_pallets(
                                 conn,
                                 selected_batch_code,
                             )
-                            st.session_state.simple_admin_pdf = None
-                            st.session_state.simple_admin_pdf_name = ""
+                            st.session_state.simple_admin_pdf = (
+                                create_pallet_a4_pdf(revised_pallets)
+                            )
+                            st.session_state.simple_admin_pdf_name = (
+                                f"pallet_{selected_batch_code}.pdf"
+                            )
                             st.session_state.simple_admin_flash = (
-                                "誤登録を削除しました。"
+                                "変更しました。 "
+                                f"商品総数：{int(result['total_qty']):,}個"
                             )
                             st.rerun()
 
@@ -1696,9 +2531,47 @@ with tab_history:
 
                         except Exception as exc:
                             st.error(
-                                "削除中にエラーが発生しました："
+                                "変更中にエラーが発生しました："
                                 f"{exc}"
                             )
+
+                    st.write("誤登録の削除")
+
+                    with st.form(
+                        f"simple_admin_delete_form_{selected_batch_code}"
+                    ):
+                        delete_checked = st.checkbox(
+                            f"{selected_batch_code} を削除する"
+                        )
+                        delete_submitted = st.form_submit_button(
+                            "登録を削除",
+                            use_container_width=True,
+                        )
+
+                    if delete_submitted:
+                        if not delete_checked:
+                            st.warning("削除確認にチェックを入れてください。")
+                        else:
+                            try:
+                                delete_pallet_batch(
+                                    conn,
+                                    selected_batch_code,
+                                )
+                                st.session_state.simple_admin_pdf = None
+                                st.session_state.simple_admin_pdf_name = ""
+                                st.session_state.simple_admin_flash = (
+                                    "誤登録を削除しました。"
+                                )
+                                st.rerun()
+
+                            except PalletError as exc:
+                                st.error(str(exc))
+
+                            except Exception as exc:
+                                st.error(
+                                    "削除中にエラーが発生しました："
+                                    f"{exc}"
+                                )
 
 
 conn.close()

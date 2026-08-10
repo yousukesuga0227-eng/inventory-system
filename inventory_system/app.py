@@ -352,7 +352,7 @@ def home_page():
         },
         {
             "page": "pages/04_stock_list.py",
-            "label": "🔍 在庫検索",
+            "label": "📋 在庫一覧",
         },
         {
             "page": "pages/05_history.py",
@@ -440,7 +440,7 @@ def home_page():
 home = st.Page(home_page, title="ホーム", icon="🏠")
 field_add_page = st.Page("pages/02_item_add.py", title="案件・商品追加", icon="➕")
 stock_page = st.Page("pages/03_stock.py", title="入出庫", icon="📥")
-stock_list_page = st.Page("pages/04_stock_list.py", title="在庫検索", icon="🔍")
+stock_list_page = st.Page("pages/04_stock_list.py", title="在庫一覧", icon="📋")
 history_page = st.Page("pages/05_history.py", title="入出庫履歴", icon="📝")
 pallet_page = st.Page("pages/13_pallet_inventory.py", title="パレット在庫", icon="📦")
 help_page = st.Page("pages/99_manual.py", title="ヘルプ", icon="❓")
