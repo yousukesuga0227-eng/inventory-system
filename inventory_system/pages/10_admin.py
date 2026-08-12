@@ -292,16 +292,119 @@ with tabs[2]:
 
     st.subheader("🙈 非表示管理")
 
-    st.warning(
-        "チェックONで通常画面から非表示にします。チェックOFFで表示に戻します。"
+    st.info(
+        "案件や商品を削除せず、通常画面の選択候補からだけ非表示にできます。"
+        "在庫・履歴・過去データとの紐づきは残ります。"
     )
+
+    completed_visible_projects = conn.execute(
+        """
+        SELECT id, code, name
+        FROM projects
+        WHERE
+            status = '完了'
+            AND COALESCE(is_hidden, FALSE) = FALSE
+        ORDER BY name
+        """
+    ).fetchall()
+
+    st.write("### ✅ 完了案件をまとめて非表示")
+
+    completed_count = len(completed_visible_projects)
+
+    if completed_count == 0:
+        st.success("現在、非表示にする完了案件はありません。")
+    else:
+        st.warning(
+            f"現在、表示中の完了案件が {completed_count} 件あります。"
+        )
+
+        with st.expander(
+            f"対象の完了案件を見る（{completed_count}件）",
+            expanded=False,
+        ):
+            st.dataframe(
+                [
+                    {
+                        "案件コード": project["code"],
+                        "案件名": project["name"],
+                    }
+                    for project in completed_visible_projects
+                ],
+                use_container_width=True,
+                hide_index=True,
+            )
+
+        bulk_hide_confirm = st.checkbox(
+            f"{completed_count}件の完了案件をまとめて非表示にする",
+            key="bulk_hide_completed_confirm",
+        )
+
+        if st.button(
+            "🙈 完了案件をまとめて非表示",
+            type="primary",
+            use_container_width=True,
+            disabled=not bulk_hide_confirm,
+            key="bulk_hide_completed_projects",
+        ):
+            try:
+                project_ids = [
+                    int(project["id"])
+                    for project in completed_visible_projects
+                ]
+                placeholders = ",".join("?" for _ in project_ids)
+
+                conn.execute(
+                    f"""
+                    UPDATE projects
+                    SET is_hidden = TRUE
+                    WHERE
+                        id IN ({placeholders})
+                        AND status = '完了'
+                        AND COALESCE(is_hidden, FALSE) = FALSE
+                    """,
+                    tuple(project_ids),
+                )
+                conn.commit()
+
+                log_action(
+                    st.session_state.username,
+                    "完了案件一括非表示",
+                    "projects",
+                    None,
+                    "完了案件一括非表示",
+                    f"{completed_count}件を非表示",
+                )
+
+                st.success(
+                    f"完了案件 {completed_count} 件を非表示にしました。"
+                )
+                st.rerun()
+
+            except Exception as exc:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+                st.error(
+                    f"完了案件の一括非表示に失敗しました：{exc}"
+                )
+
+    st.divider()
+    st.write("### 📁 案件の表示・非表示")
 
     projects = conn.execute(
         """
-        SELECT *
+        SELECT
+            id,
+            code,
+            name,
+            status,
+            COALESCE(is_hidden, FALSE) AS is_hidden
         FROM projects
-        WHERE COALESCE(is_hidden, FALSE) = FALSE
-        ORDER BY name
+        ORDER BY
+            COALESCE(is_hidden, FALSE),
+            name
         """
     ).fetchall()
 
@@ -310,17 +413,96 @@ with tabs[2]:
 
     else:
         project_options = {
-            f'{p["code"]} / {p["name"]}': p["id"]
+            (
+                f'{"🙈 " if p["is_hidden"] else ""}'
+                f'{p["code"]} / {p["name"]} / {p["status"]}'
+            ): p["id"]
             for p in projects
         }
 
         selected_project_label = st.selectbox(
             "案件を選択",
             list(project_options.keys()),
-            key="hide_manage_project"
+            key="hide_manage_project",
+        )
+        selected_project_id = project_options[selected_project_label]
+
+        selected_project = conn.execute(
+            """
+            SELECT
+                id,
+                code,
+                name,
+                status,
+                COALESCE(is_hidden, FALSE) AS is_hidden
+            FROM projects
+            WHERE id = ?
+            LIMIT 1
+            """,
+            (selected_project_id,),
+        ).fetchone()
+
+        project_hidden = st.checkbox(
+            "🙈 この案件を通常画面から非表示にする",
+            value=bool(selected_project["is_hidden"]),
+            key=f'hide_project_{selected_project_id}',
         )
 
-        selected_project_id = project_options[selected_project_label]
+        if st.button(
+            "案件の表示設定を更新",
+            type="primary",
+            use_container_width=True,
+            key="update_project_visibility",
+        ):
+            try:
+                conn.execute(
+                    """
+                    UPDATE projects
+                    SET is_hidden = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        bool(project_hidden),
+                        selected_project_id,
+                    ),
+                )
+                conn.commit()
+
+                log_action(
+                    st.session_state.username,
+                    "案件非表示" if project_hidden else "案件再表示",
+                    "projects",
+                    selected_project_id,
+                    selected_project["name"],
+                    (
+                        "通常画面から非表示"
+                        if project_hidden
+                        else "通常画面へ再表示"
+                    ),
+                )
+
+                st.success(
+                    "案件を非表示にしました。"
+                    if project_hidden
+                    else "案件を再表示しました。"
+                )
+                st.rerun()
+
+            except Exception as exc:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+                st.error(
+                    f"案件の表示設定更新に失敗しました：{exc}"
+                )
+
+        st.caption(
+            "案件を非表示にしても、商品側の個別非表示設定は変更しません。"
+        )
+
+        st.divider()
+        st.write("### 📦 案件内商品の表示・非表示")
 
         items = conn.execute(
             """
@@ -333,43 +515,69 @@ with tabs[2]:
             WHERE project_id = ?
             ORDER BY code
             """,
-            (selected_project_id,)
+            (selected_project_id,),
         ).fetchall()
 
         if not items:
             st.info("この案件には商品がありません")
-
         else:
-            st.write("### 案件内の商品一覧")
+            st.caption(
+                "チェックONで通常画面から非表示、"
+                "OFFで表示に戻します。"
+            )
 
             for item in items:
                 st.checkbox(
                     f'{item["code"]} / {item["name"]}',
                     value=bool(item["is_hidden"]),
-                    key=f'hide_item_{item["id"]}'
+                    key=f'hide_item_{item["id"]}',
                 )
 
-            if st.button("非表示設定を更新", type="primary"):
-
-                for item in items:
-                    new_hidden = st.session_state[f'hide_item_{item["id"]}']
-
-                    conn.execute(
-                        """
-                        UPDATE items
-                        SET is_hidden = ?
-                        WHERE id = ?
-                        """,
-                        (
-                            new_hidden,
-                            item["id"]
+            if st.button(
+                "商品の非表示設定を更新",
+                use_container_width=True,
+                key="update_item_visibility",
+            ):
+                try:
+                    for item in items:
+                        new_hidden = st.session_state[
+                            f'hide_item_{item["id"]}'
+                        ]
+                        conn.execute(
+                            """
+                            UPDATE items
+                            SET is_hidden = ?
+                            WHERE id = ?
+                            """,
+                            (
+                                new_hidden,
+                                item["id"],
+                            ),
                         )
+
+                    conn.commit()
+
+                    log_action(
+                        st.session_state.username,
+                        "商品非表示設定",
+                        "items",
+                        None,
+                        selected_project["name"],
+                        "案件内商品の非表示設定を更新",
                     )
 
-                conn.commit()
+                    st.success("商品の非表示設定を更新しました")
+                    st.rerun()
 
-                st.success("非表示設定を更新しました")
-                st.rerun()
+                except Exception as exc:
+                    try:
+                        conn.rollback()
+                    except Exception:
+                        pass
+                    st.error(
+                        f"商品の非表示設定更新に失敗しました：{exc}"
+                    )
+
 
 # =====================
 # 完了案件確認
