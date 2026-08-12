@@ -207,7 +207,7 @@ def _draw_qr_code(pdf, value, x, y, size):
     pdf.restoreState()
 
 
-def create_shipping_a4_pdf(items):
+def _shark_base_create_shipping_a4_pdf_20260812(items):
     """選択商品をA4横向き・1商品1ページの出荷商品票にする。"""
 
     items = list(items)
@@ -233,7 +233,16 @@ def create_shipping_a4_pdf(items):
         project_name = str(_value(item, "project_name", ""))
         project_code = str(_value(item, "project_code", ""))
         item_name = str(_value(item, "item_name", ""))
-        item_code = str(_value(item, "item_code", ""))
+        item_code = str(
+            _value(
+                item,
+                "base_item_code",
+                _value(item, "display_item_code", _value(item, "item_code", "")),
+            )
+        )
+        qr_value = str(_value(item, "qr_value", _value(item, "item_code", "")))
+        unit_label = str(_value(item, "unit_label", "") or "").strip()
+
         shipping_date = _format_date(
             _value(
                 item,
@@ -403,19 +412,24 @@ def create_shipping_a4_pdf(items):
         qr_size = 48 * mm
         _draw_qr_code(
             pdf,
-            item_code,
+            qr_value,
             right_box_x + ((right_box_width - qr_size) / 2),
             margin + (40 * mm),
             qr_size,
         )
+        qr_caption = (
+            f"{item_code}  {unit_label}"
+            if unit_label
+            else (item_code or "QRコードなし")
+        )
         caption_font_size = _fit_font_size(
-            item_code,
+            qr_caption,
             right_box_width - (12 * mm),
             11,
             min_size=8,
         )
         displayed_caption = _truncate_text(
-            item_code or "QRコードなし",
+            qr_caption,
             right_box_width - (12 * mm),
             caption_font_size,
         )
@@ -431,3 +445,107 @@ def create_shipping_a4_pdf(items):
     pdf.save()
     buffer.seek(0)
     return buffer.getvalue()
+
+# === SHARK A4 UNIT QR 20260812 ===
+def _shark_unit_qr_parts(item):
+    """出荷数分のA4用に、1/2・2/2形式の個別QR情報を作る。"""
+    source = dict(item)
+
+    base_code = str(
+        source.get("base_item_code")
+        or source.get("display_item_code")
+        or source.get("item_code")
+        or source.get("code")
+        or ""
+    ).strip()
+
+    raw_qty = (
+        source.get("required_quantity")
+        if source.get("required_quantity") is not None
+        else source.get("shipping_quantity")
+        if source.get("shipping_quantity") is not None
+        else source.get("quantity")
+        if source.get("quantity") is not None
+        else 1
+    )
+
+    try:
+        total = int(raw_qty or 0)
+    except (TypeError, ValueError):
+        total = 1
+
+    total = max(total, 0)
+    return source, base_code, total
+
+
+def _shark_expand_a4_unit_labels(items):
+    """
+    例:
+      商品コード ABC / 出荷数2
+        -> ABC|1/2
+        -> ABC|2/2
+
+    元のA4生成関数へ「出荷数分の行」を渡すだけなので、
+    既存レイアウトはそのまま使う。
+    """
+    expanded = []
+
+    for raw_item in list(items or []):
+        source, base_code, total = _shark_unit_qr_parts(raw_item)
+
+        if total <= 0:
+            continue
+
+        for sequence in range(1, total + 1):
+            unit = dict(source)
+            unit_label = f"{sequence}/{total}"
+
+            unit_code = (
+                f"{base_code}|{unit_label}"
+                if base_code
+                else unit_label
+            )
+
+            unit["base_item_code"] = base_code
+            unit["display_item_code"] = base_code
+            unit["unit_index"] = sequence
+            unit["unit_total"] = total
+            unit["unit_label"] = unit_label
+            unit["unit_code"] = unit_code
+
+            unit["qr_code"] = unit_code
+            unit["qr_value"] = unit_code
+            unit["barcode_value"] = unit_code
+
+            # 商品コード表示は元コードのまま。QRだけ個別値を使う。
+            expanded.append(unit)
+
+    return expanded
+
+
+def create_shipping_a4_pdf(*args, **kwargs):
+    """SHARK A4完全版: 出荷数分に展開して個別QRを付与する。"""
+    if args:
+        expanded = _shark_expand_a4_unit_labels(args[0])
+        return _shark_base_create_shipping_a4_pdf_20260812(expanded, *args[1:], **kwargs)
+
+    for key in (
+        "items",
+        "selected_items",
+        "rows",
+        "labels",
+        "label_items",
+        "document_items",
+    ):
+        if key in kwargs:
+            patched_kwargs = dict(kwargs)
+            patched_kwargs[key] = _shark_expand_a4_unit_labels(
+                patched_kwargs[key]
+            )
+            return _shark_base_create_shipping_a4_pdf_20260812(**patched_kwargs)
+
+    raise TypeError(
+        "create_shipping_a4_pdf: A4ラベル対象データを取得できませんでした。"
+    )
+
+# === SHARK A4 UNIT QR FINISH 20260812 ===

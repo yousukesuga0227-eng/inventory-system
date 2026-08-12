@@ -398,6 +398,18 @@ def add_outbound_barcode():
     required_map = st.session_state.get("stock_out_required_map", {})
     base_code, _unit_number = split_unit_barcode(barcode_text)
 
+    # === SHARK UNIT QR DUPLICATE GUARD 20260812 ===
+    # 個別QRは同じ1枚を二重読取しても数量を増やさない。
+    if (
+        _unit_number
+        and barcode_text in st.session_state.stock_out_scanned_codes
+    ):
+        st.session_state.stock_out_notice = (
+            "warning",
+            f"このQRは読取済みです：{_unit_number}",
+        )
+        return
+
     if base_code not in item_map:
         st.session_state.stock_out_notice = (
             "error",
@@ -547,6 +559,43 @@ with tab_in:
 # ============================================================
 # 出庫
 # ============================================================
+# === SHARK UNIT QR PARSER 20260812 ===
+_SHARK_UNIT_QR_PATTERN = re.compile(
+    r"^(?P<base>.+)\|(?P<sequence>\d+)/(?P<total>\d+)$"
+)
+
+try:
+    _shark_original_split_unit_barcode_20260812 = split_unit_barcode
+except NameError:
+    _shark_original_split_unit_barcode_20260812 = None
+
+
+def split_unit_barcode(raw_code):
+    """
+    A4個別QR:
+        ABC|1/2 -> ("ABC", "1/2")
+        ABC|2/2 -> ("ABC", "2/2")
+
+    旧バーコードは既存split_unit_barcodeへそのまま渡す。
+    """
+    text = str(raw_code or "").strip()
+    match = _SHARK_UNIT_QR_PATTERN.fullmatch(text)
+
+    if match:
+        sequence = int(match.group("sequence"))
+        total = int(match.group("total"))
+
+        if total > 0 and 1 <= sequence <= total:
+            return (
+                match.group("base"),
+                f"{sequence}/{total}",
+            )
+
+    if _shark_original_split_unit_barcode_20260812 is not None:
+        return _shark_original_split_unit_barcode_20260812(raw_code)
+
+    return (text, None)
+
 # === SHARK SIMPLE OUTBOUND 20260810 START ===
 with tab_out:
     st.subheader("出庫処理")
