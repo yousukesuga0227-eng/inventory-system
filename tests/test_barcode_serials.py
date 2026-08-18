@@ -22,6 +22,23 @@ class BarcodeSerialsTest(unittest.TestCase):
             ("1001-2606-0007", 25),
         )
 
+    def test_split_quantity_unit_qr(self):
+        self.assertEqual(
+            split_unit_barcode("1001-2606-0007|1/2\r\n"),
+            ("1001-2606-0007", 1),
+        )
+        self.assertEqual(
+            split_unit_barcode("1001-2606-0007|2/2"),
+            ("1001-2606-0007", 2),
+        )
+        self.assertTrue(is_unit_barcode("1001-2606-0007|1/2"))
+
+    def test_invalid_quantity_unit_qr_is_not_split(self):
+        self.assertEqual(
+            split_unit_barcode("1001-2606-0007|3/2"),
+            ("1001-2606-0007|3/2", None),
+        )
+
     def test_base_item_code_is_not_mistaken_for_unit_barcode(self):
         self.assertEqual(
             split_unit_barcode("1001-2606-0007"),

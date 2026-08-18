@@ -10,6 +10,9 @@ MAX_UNIT_NUMBER = (10 ** UNIT_NUMBER_DIGITS) - 1
 _UNIT_BARCODE_PATTERN = re.compile(
     rf"^(?P<item_code>.+)-(?P<unit_number>\d{{{UNIT_NUMBER_DIGITS}}})$"
 )
+_QUANTITY_UNIT_QR_PATTERN = re.compile(
+    r"^(?P<item_code>.+)\|(?P<sequence>\d+)/(?P<total>\d+)$"
+)
 
 
 def _extract_json_item_code(value):
@@ -88,10 +91,20 @@ def split_unit_barcode(value):
     """
     戻り値は (商品コード本体, 個体連番)。
 
+    A4商品票の「商品コード|通番/総数」は通番を個体連番として返す。
     末尾3桁の個体連番が無い場合、個体連番はNone。
     商品コード本体の末尾4桁連番とは混同しない。
     """
     barcode_text = normalize_scanned_barcode(value)
+
+    quantity_match = _QUANTITY_UNIT_QR_PATTERN.fullmatch(barcode_text)
+    if quantity_match:
+        sequence = int(quantity_match.group("sequence"))
+        total = int(quantity_match.group("total"))
+
+        if total > 0 and 1 <= sequence <= total:
+            return quantity_match.group("item_code"), sequence
+
     match = _UNIT_BARCODE_PATTERN.fullmatch(barcode_text)
 
     if not match:

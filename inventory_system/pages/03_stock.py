@@ -559,43 +559,6 @@ with tab_in:
 # ============================================================
 # 出庫
 # ============================================================
-# === SHARK UNIT QR PARSER 20260812 ===
-_SHARK_UNIT_QR_PATTERN = re.compile(
-    r"^(?P<base>.+)\|(?P<sequence>\d+)/(?P<total>\d+)$"
-)
-
-try:
-    _shark_original_split_unit_barcode_20260812 = split_unit_barcode
-except NameError:
-    _shark_original_split_unit_barcode_20260812 = None
-
-
-def split_unit_barcode(raw_code):
-    """
-    A4個別QR:
-        ABC|1/2 -> ("ABC", "1/2")
-        ABC|2/2 -> ("ABC", "2/2")
-
-    旧バーコードは既存split_unit_barcodeへそのまま渡す。
-    """
-    text = str(raw_code or "").strip()
-    match = _SHARK_UNIT_QR_PATTERN.fullmatch(text)
-
-    if match:
-        sequence = int(match.group("sequence"))
-        total = int(match.group("total"))
-
-        if total > 0 and 1 <= sequence <= total:
-            return (
-                match.group("base"),
-                f"{sequence}/{total}",
-            )
-
-    if _shark_original_split_unit_barcode_20260812 is not None:
-        return _shark_original_split_unit_barcode_20260812(raw_code)
-
-    return (text, None)
-
 # === SHARK SIMPLE OUTBOUND 20260810 START ===
 with tab_out:
     st.subheader("出庫処理")
