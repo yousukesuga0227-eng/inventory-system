@@ -24,10 +24,9 @@ from reportlab.platypus import (
 
 from auth import check_login
 from barcode_serials import (
-    format_unit_numbers,
     is_unit_barcode,
     normalize_scanned_barcode,
-    split_unit_barcode,
+    resolve_scanned_item_code,
 )
 from database import get_connection
 
@@ -396,7 +395,10 @@ def add_outbound_barcode():
 
     item_map = st.session_state.get("stock_out_item_map", {})
     required_map = st.session_state.get("stock_out_required_map", {})
-    base_code, _unit_number = split_unit_barcode(barcode_text)
+    base_code, _unit_number = resolve_scanned_item_code(
+        barcode_text,
+        item_map,
+    )
 
     # === SHARK UNIT QR DUPLICATE GUARD 20260812 ===
     # 個別QRは同じ1枚を二重読取しても数量を増やさない。
@@ -425,7 +427,7 @@ def add_outbound_barcode():
         return
 
     current_counter = Counter(
-        split_unit_barcode(code)[0]
+        resolve_scanned_item_code(code, item_map)[0]
         for code in st.session_state.stock_out_scanned_codes
     )
     if current_counter.get(base_code, 0) >= required_map.get(base_code, 0):
@@ -499,7 +501,10 @@ with tab_in:
         default_index = 0
         if barcode:
             clean_barcode = normalize_scanned_barcode(barcode)
-            base_code, unit_number = split_unit_barcode(clean_barcode)
+            base_code, unit_number = resolve_scanned_item_code(
+                clean_barcode,
+                in_code_map,
+            )
             matched_label = in_code_map.get(base_code)
             if matched_label:
                 default_index = in_item_options.index(matched_label)
@@ -737,7 +742,7 @@ with tab_out:
 
             scanned_codes = st.session_state.stock_out_scanned_codes
             scan_counter = Counter(
-                split_unit_barcode(code)[0]
+                resolve_scanned_item_code(code, out_item_map)[0]
                 for code in scanned_codes
             )
             checked_total = len(scanned_codes)

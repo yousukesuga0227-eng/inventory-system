@@ -780,6 +780,7 @@ try:
 
         WHERE i.project_id = {ph}
         AND COALESCE(i.is_hidden, FALSE) = FALSE
+        AND COALESCE(i.is_active, TRUE) = TRUE
         ORDER BY i.name
         """,
         [selected_project_id]

@@ -1,7 +1,7 @@
 import streamlit as st
 from database import get_connection
 from auth import check_login
-from barcode_serials import normalize_scanned_barcode, split_unit_barcode
+from barcode_serials import item_code_candidates
 
 check_login()
 
@@ -18,8 +18,7 @@ barcode = st.text_input(
 )
 
 if barcode:
-    clean_barcode = normalize_scanned_barcode(barcode)
-    base_code, unit_number = split_unit_barcode(clean_barcode)
+    candidate_codes, unit_number = item_code_candidates(barcode)
 
     query = """
     SELECT
@@ -34,13 +33,17 @@ if barcode:
     ON i.project_id = p.id
 
     WHERE
-        i.code = ?
+        UPPER(TRIM(i.code)) = UPPER(?)
     """
 
-    row = conn.execute(
-        query,
-        (base_code,)
-    ).fetchone()
+    row = None
+    for candidate_code in candidate_codes:
+        row = conn.execute(
+            query,
+            (candidate_code,)
+        ).fetchone()
+        if row:
+            break
 
     if row:
 

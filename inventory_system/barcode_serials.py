@@ -50,9 +50,12 @@ def normalize_scanned_barcode(value):
     対応形式:
     - SHARK1|TYPE=ITEM|ITEM=... の情報入りQR
     - JSON形式のQR（将来互換）
-    - 旧形式の「案件コード_商品コード」
     - 商品コードそのもの
     - 商品コード末尾に3桁の個体番号を付けた形式
+
+    アンダースコアは商品コードの一部として保持する。
+    旧形式の「案件コード_商品コード」は、商品一覧と照合するときだけ
+    item_code_candidates() で後方互換候補へ展開する。
     """
     barcode_text = str(value or "").strip()
 
@@ -63,9 +66,6 @@ def normalize_scanned_barcode(value):
     json_item_code = _extract_json_item_code(barcode_text)
     if json_item_code:
         return json_item_code
-
-    if "_" in barcode_text:
-        barcode_text = barcode_text.split("_")[-1]
 
     return barcode_text
 
@@ -114,6 +114,53 @@ def split_unit_barcode(value):
         match.group("item_code"),
         int(match.group("unit_number")),
     )
+
+
+def item_code_candidates(value):
+    """QRから、商品照合に使う候補を優先順で返す。"""
+    base_code, unit_number = split_unit_barcode(value)
+    candidates = [base_code]
+
+    # 旧形式「案件コード_商品コード」は完全一致を先に試し、
+    # 見つからない場合だけアンダースコア区切りの後方を順に試す。
+    # 商品コード自体にアンダースコアがあっても、長い候補が先になる。
+    if "_" in base_code:
+        parts = base_code.split("_")
+        for index in range(1, len(parts)):
+            legacy_code = "_".join(parts[index:]).strip()
+            if legacy_code and legacy_code not in candidates:
+                candidates.append(legacy_code)
+
+    return candidates, unit_number
+
+
+def _item_code_lookup_key(value):
+    """DBとQRの商品コードを安全に照合するための内部キー。"""
+    return str(value or "").strip().casefold()
+
+
+def resolve_scanned_item_code(value, available_codes):
+    """
+    QRの商品コードを、DBに存在する元の商品コードへ解決する。
+
+    前後空白・大文字小文字の差を吸収しつつ、商品コード内の
+    アンダースコアを優先して保持する。見つからない場合は、
+    エラー表示用にQRから得た第一候補を返す。
+    """
+    candidates, unit_number = item_code_candidates(value)
+    code_by_key = {}
+
+    for code in available_codes or []:
+        key = _item_code_lookup_key(code)
+        if key and key not in code_by_key:
+            code_by_key[key] = code
+
+    for candidate in candidates:
+        matched_code = code_by_key.get(_item_code_lookup_key(candidate))
+        if matched_code is not None:
+            return matched_code, unit_number
+
+    return candidates[0], unit_number
 
 
 def is_unit_barcode(value):
