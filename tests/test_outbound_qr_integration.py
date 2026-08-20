@@ -32,6 +32,14 @@ class OutboundQrIntegrationTest(unittest.TestCase):
         )
         self.assertEqual(scan_counter, {item_code: 2})
 
+        for separator in ("}", "｜", "\\"):
+            with self.subTest(separator=separator):
+                scanner_value = qr_values[0].replace("|", separator)
+                self.assertEqual(
+                    resolve_scanned_item_code(scanner_value, item_map),
+                    (item_code, 1),
+                )
+
 
 if __name__ == "__main__":
     unittest.main()

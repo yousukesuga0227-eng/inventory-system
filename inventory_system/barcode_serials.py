@@ -13,6 +13,12 @@ _UNIT_BARCODE_PATTERN = re.compile(
 _QUANTITY_UNIT_QR_PATTERN = re.compile(
     r"^(?P<item_code>.+)\|(?P<sequence>\d+)/(?P<total>\d+)$"
 )
+_QUANTITY_UNIT_QR_SCAN_PATTERN = re.compile(
+    r"^(?P<item_code>.+)(?P<separator>.)(?P<sequence>\d+)/(?P<total>\d+)$"
+)
+_QUANTITY_UNIT_QR_SEPARATORS = frozenset(
+    {"|", "｜", "}", "｝", "\\", "＼", "]", "］"}
+)
 
 
 def _extract_json_item_code(value):
@@ -43,6 +49,23 @@ def _extract_json_item_code(value):
     return str(item_code).strip()
 
 
+def _normalize_quantity_unit_qr_text(value):
+    """実機リーダーで変換されたA4 QR区切り記号を半角|へ統一する。"""
+    text = str(value or "").strip()
+    match = _QUANTITY_UNIT_QR_SCAN_PATTERN.fullmatch(text)
+
+    if not match:
+        return None
+
+    if match.group("separator") not in _QUANTITY_UNIT_QR_SEPARATORS:
+        return None
+
+    return (
+        f"{match.group('item_code')}|"
+        f"{match.group('sequence')}/{match.group('total')}"
+    )
+
+
 def normalize_scanned_barcode(value):
     """
     バーコードリーダー／QRリーダーの入力をSHARKの商品コード形式へ整える。
@@ -50,6 +73,7 @@ def normalize_scanned_barcode(value):
     対応形式:
     - SHARK1|TYPE=ITEM|ITEM=... の情報入りQR
     - JSON形式のQR（将来互換）
+    - A4個別QR（実機で|が}等へ変換された入力を含む）
     - 商品コードそのもの
     - 商品コード末尾に3桁の個体番号を付けた形式
 
@@ -66,6 +90,10 @@ def normalize_scanned_barcode(value):
     json_item_code = _extract_json_item_code(barcode_text)
     if json_item_code:
         return json_item_code
+
+    quantity_unit_qr = _normalize_quantity_unit_qr_text(barcode_text)
+    if quantity_unit_qr:
+        return quantity_unit_qr
 
     return barcode_text
 
@@ -116,10 +144,23 @@ def split_unit_barcode(value):
     )
 
 
-def item_code_candidates(value):
-    """QRから、商品照合に使う候補を優先順で返す。"""
-    base_code, unit_number = split_unit_barcode(value)
-    candidates = [base_code]
+def item_code_candidate_details(value):
+    """QRから、(商品コード候補, 個体番号)を優先順で返す。"""
+    barcode_text = normalize_scanned_barcode(value)
+    base_code, unit_number = split_unit_barcode(barcode_text)
+    details = []
+
+    def append_candidate(code, candidate_unit_number):
+        code = str(code or "")
+        if not code:
+            return
+        candidate = (code, candidate_unit_number)
+        if candidate not in details:
+            details.append(candidate)
+
+    # 商品コード自体がABC-001のように末尾3桁でも、完全一致を優先する。
+    append_candidate(barcode_text, None)
+    append_candidate(base_code, unit_number)
 
     # 旧形式「案件コード_商品コード」は完全一致を先に試し、
     # 見つからない場合だけアンダースコア区切りの後方を順に試す。
@@ -128,8 +169,23 @@ def item_code_candidates(value):
         parts = base_code.split("_")
         for index in range(1, len(parts)):
             legacy_code = "_".join(parts[index:]).strip()
-            if legacy_code and legacy_code not in candidates:
-                candidates.append(legacy_code)
+            append_candidate(legacy_code, unit_number)
+
+    return details
+
+
+def item_code_candidates(value):
+    """QRから、商品コード候補と個体番号を後方互換形式で返す。"""
+    details = item_code_candidate_details(value)
+    candidates = [code for code, _unit_number in details]
+    unit_number = next(
+        (
+            candidate_unit_number
+            for _code, candidate_unit_number in details
+            if candidate_unit_number is not None
+        ),
+        None,
+    )
 
     return candidates, unit_number
 
@@ -147,7 +203,7 @@ def resolve_scanned_item_code(value, available_codes):
     アンダースコアを優先して保持する。見つからない場合は、
     エラー表示用にQRから得た第一候補を返す。
     """
-    candidates, unit_number = item_code_candidates(value)
+    details = item_code_candidate_details(value)
     code_by_key = {}
 
     for code in available_codes or []:
@@ -155,12 +211,15 @@ def resolve_scanned_item_code(value, available_codes):
         if key and key not in code_by_key:
             code_by_key[key] = code
 
-    for candidate in candidates:
+    for candidate, unit_number in details:
         matched_code = code_by_key.get(_item_code_lookup_key(candidate))
         if matched_code is not None:
             return matched_code, unit_number
 
-    return candidates[0], unit_number
+    if not details:
+        return "", None
+
+    return details[0]
 
 
 def is_unit_barcode(value):

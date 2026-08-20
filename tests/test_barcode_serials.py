@@ -3,6 +3,7 @@ import unittest
 from inventory_system.barcode_serials import (
     format_unit_numbers,
     is_unit_barcode,
+    item_code_candidate_details,
     item_code_candidates,
     make_unit_barcode,
     normalize_scanned_barcode,
@@ -35,6 +36,21 @@ class BarcodeSerialsTest(unittest.TestCase):
         )
         self.assertTrue(is_unit_barcode("1001-2606-0007|1/2"))
 
+    def test_scanner_keyboard_separator_variants_are_normalized(self):
+        base_code = "1001-2606-0007"
+
+        for separator in ("}", "｜", "\\", "]", "｝", "＼", "］"):
+            with self.subTest(separator=separator):
+                scanned = f"{base_code}{separator}1/2"
+                self.assertEqual(
+                    normalize_scanned_barcode(scanned),
+                    f"{base_code}|1/2",
+                )
+                self.assertEqual(
+                    split_unit_barcode(scanned),
+                    (base_code, 1),
+                )
+
     def test_invalid_quantity_unit_qr_is_not_split(self):
         self.assertEqual(
             split_unit_barcode("1001-2606-0007|3/2"),
@@ -55,7 +71,14 @@ class BarcodeSerialsTest(unittest.TestCase):
         )
         self.assertEqual(
             item_code_candidates("PROJECT_1001-2606-0007-003\r\n"),
-            (["PROJECT_1001-2606-0007", "1001-2606-0007"], 3),
+            (
+                [
+                    "PROJECT_1001-2606-0007-003",
+                    "PROJECT_1001-2606-0007",
+                    "1001-2606-0007",
+                ],
+                3,
+            ),
         )
         self.assertEqual(
             resolve_scanned_item_code(
@@ -82,6 +105,20 @@ class BarcodeSerialsTest(unittest.TestCase):
         self.assertEqual(
             resolve_scanned_item_code("abc-001|1/1", [" ABC-001 "]),
             (" ABC-001 ", 1),
+        )
+
+    def test_exact_three_digit_suffix_item_code_wins_before_unit_fallback(self):
+        self.assertEqual(
+            item_code_candidate_details("ABC-001"),
+            [("ABC-001", None), ("ABC", 1)],
+        )
+        self.assertEqual(
+            resolve_scanned_item_code("ABC-001", ["ABC-001"]),
+            ("ABC-001", None),
+        )
+        self.assertEqual(
+            resolve_scanned_item_code("ABC-001", ["ABC"]),
+            ("ABC", 1),
         )
 
     def test_unit_number_range(self):

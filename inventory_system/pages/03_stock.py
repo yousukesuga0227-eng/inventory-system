@@ -24,7 +24,6 @@ from reportlab.platypus import (
 
 from auth import check_login
 from barcode_serials import (
-    is_unit_barcode,
     normalize_scanned_barcode,
     resolve_scanned_item_code,
 )
@@ -403,7 +402,7 @@ def add_outbound_barcode():
     # === SHARK UNIT QR DUPLICATE GUARD 20260812 ===
     # 個別QRは同じ1枚を二重読取しても数量を増やさない。
     if (
-        _unit_number
+        _unit_number is not None
         and barcode_text in st.session_state.stock_out_scanned_codes
     ):
         st.session_state.stock_out_notice = (
@@ -416,13 +415,6 @@ def add_outbound_barcode():
         st.session_state.stock_out_notice = (
             "error",
             f"案件違い：{base_code} は選択中の案件の商品ではありません。",
-        )
-        return
-
-    if is_unit_barcode(barcode_text) and barcode_text in st.session_state.stock_out_scanned_codes:
-        st.session_state.stock_out_notice = (
-            "error",
-            f"重複読取：{barcode_text} はすでに読み取り済みです。",
         )
         return
 

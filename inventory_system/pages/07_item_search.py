@@ -1,7 +1,7 @@
 import streamlit as st
 from database import get_connection
 from auth import check_login
-from barcode_serials import item_code_candidates
+from barcode_serials import item_code_candidate_details
 
 check_login()
 
@@ -18,7 +18,7 @@ barcode = st.text_input(
 )
 
 if barcode:
-    candidate_codes, unit_number = item_code_candidates(barcode)
+    candidate_details = item_code_candidate_details(barcode)
 
     query = """
     SELECT
@@ -37,12 +37,14 @@ if barcode:
     """
 
     row = None
-    for candidate_code in candidate_codes:
+    unit_number = None
+    for candidate_code, candidate_unit_number in candidate_details:
         row = conn.execute(
             query,
             (candidate_code,)
         ).fetchone()
         if row:
+            unit_number = candidate_unit_number
             break
 
     if row:
