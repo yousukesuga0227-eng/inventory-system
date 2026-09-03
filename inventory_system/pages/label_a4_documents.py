@@ -84,6 +84,15 @@ def _format_date(value):
         return text
 
 
+def _format_shipping_quantity(required_quantity, unit_label=""):
+    """個別A4ラベルは通番、通常データは従来どおり出荷数を表示する。"""
+    unit_label = str(unit_label or "").strip()
+    if unit_label:
+        return unit_label
+
+    return f"{int(required_quantity or 0):,}"
+
+
 def _fit_font_size(text, max_width, start_size, min_size=12):
     text = str(text or "")
 
@@ -346,7 +355,10 @@ def _shark_base_create_shipping_a4_pdf_20260812(items):
             quantity_box_top - (8 * mm),
             "出荷数",
         )
-        quantity_text = f"{required_quantity:,}"
+        quantity_text = _format_shipping_quantity(
+            required_quantity,
+            unit_label,
+        )
         quantity_font_size = _fit_font_size(
             quantity_text,
             quantity_box_width - (40 * mm),
