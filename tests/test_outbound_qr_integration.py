@@ -3,11 +3,22 @@ from collections import Counter
 
 from inventory_system.barcode_serials import resolve_scanned_item_code
 from inventory_system.pages.label_a4_documents import (
+    _format_shipping_quantity,
     _shark_expand_a4_unit_labels,
 )
 
 
 class OutboundQrIntegrationTest(unittest.TestCase):
+    def test_a4_quantity_display_uses_unit_sequence(self):
+        self.assertEqual(
+            _format_shipping_quantity(17, "1/17"),
+            "1/17",
+        )
+        self.assertEqual(
+            _format_shipping_quantity(1234),
+            "1,234",
+        )
+
     def test_a4_unit_qr_round_trip_counts_each_printed_label(self):
         item_code = "ABC_DEF"
         item_map = {item_code: {"code": item_code}}
