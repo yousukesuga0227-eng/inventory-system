@@ -401,15 +401,17 @@ def add_outbound_barcode():
 
     # === SHARK UNIT QR DUPLICATE GUARD 20260812 ===
     # 個別QRは同じ1枚を二重読取しても数量を増やさない。
-    if (
-        _unit_number is not None
-        and barcode_text in st.session_state.stock_out_scanned_codes
-    ):
-        st.session_state.stock_out_notice = (
-            "warning",
-            f"このQRは読取済みです：{_unit_number}",
-        )
-        return
+    if _unit_number is not None:
+        scanned_units = {
+            resolve_scanned_item_code(code, item_map)
+            for code in st.session_state.stock_out_scanned_codes
+        }
+        if (base_code, _unit_number) in scanned_units:
+            st.session_state.stock_out_notice = (
+                "warning",
+                f"このQRは読取済みです：{_unit_number}",
+            )
+            return
 
     if base_code not in item_map:
         st.session_state.stock_out_notice = (
