@@ -1,5 +1,6 @@
 import json
 import re
+import unicodedata
 
 from item_code_qr import extract_item_code_from_qr
 
@@ -17,7 +18,13 @@ _QUANTITY_UNIT_QR_SCAN_PATTERN = re.compile(
     r"^(?P<item_code>.+)(?P<separator>.)(?P<sequence>\d+)/(?P<total>\d+)$"
 )
 _QUANTITY_UNIT_QR_SEPARATORS = frozenset(
-    {"|", "｜", "}", "｝", "\\", "＼", "]", "］"}
+    {
+        "|", "｜", "}", "｝", "\\", "＼", "]", "］",
+        "¥", "￥", "¦", "￤", "│", "┃", "‖",
+    }
+)
+_QUANTITY_UNIT_QR_ITEM_CODE_SAFE_PUNCTUATION = frozenset(
+    {"-", "_", ".", "/"}
 )
 
 
@@ -49,6 +56,22 @@ def _extract_json_item_code(value):
     return str(item_code).strip()
 
 
+def _is_quantity_unit_qr_separator(value):
+    """A4個別QRの区切りとして扱ってよい1文字か判定する。"""
+    text = str(value or "")
+    if len(text) != 1:
+        return False
+
+    if text in _QUANTITY_UNIT_QR_SEPARATORS:
+        return True
+
+    if text.isalnum() or text in _QUANTITY_UNIT_QR_ITEM_CODE_SAFE_PUNCTUATION:
+        return False
+
+    # キーボード配列差で | が通貨記号・罫線・記号へ化けても吸収する。
+    return unicodedata.category(text)[:1] in {"P", "S"}
+
+
 def _normalize_quantity_unit_qr_text(value):
     """実機リーダーで変換されたA4 QR区切り記号を半角|へ統一する。"""
     text = str(value or "").strip()
@@ -57,7 +80,7 @@ def _normalize_quantity_unit_qr_text(value):
     if not match:
         return None
 
-    if match.group("separator") not in _QUANTITY_UNIT_QR_SEPARATORS:
+    if not _is_quantity_unit_qr_separator(match.group("separator")):
         return None
 
     return (
@@ -195,6 +218,40 @@ def _item_code_lookup_key(value):
     return str(value or "").strip().casefold()
 
 
+def _resolve_quantity_unit_qr_with_available_codes(value, available_codes):
+    """
+    A4個別QRの区切り文字が想定外に化けても、DBの商品コードと一致する場合は復元する。
+
+    例:
+      ABC¥1/17 -> ("ABC", 1)
+      ABCx1/17 -> ("ABC", 1)  # x がリーダー側で誤入力された場合もDB一致時だけ救済
+    """
+    text = str(value or "").strip()
+    match = _QUANTITY_UNIT_QR_SCAN_PATTERN.fullmatch(text)
+    if not match:
+        return None
+
+    sequence = int(match.group("sequence"))
+    total = int(match.group("total"))
+    if total <= 0 or not 1 <= sequence <= total:
+        return None
+
+    scanned_item_code = match.group("item_code")
+    code_by_key = {}
+
+    for code in available_codes or []:
+        key = _item_code_lookup_key(code)
+        if key and key not in code_by_key:
+            code_by_key[key] = code
+
+    for candidate, _unit_number in item_code_candidate_details(scanned_item_code):
+        matched_code = code_by_key.get(_item_code_lookup_key(candidate))
+        if matched_code is not None:
+            return matched_code, sequence
+
+    return None
+
+
 def resolve_scanned_item_code(value, available_codes):
     """
     QRの商品コードを、DBに存在する元の商品コードへ解決する。
@@ -215,6 +272,13 @@ def resolve_scanned_item_code(value, available_codes):
         matched_code = code_by_key.get(_item_code_lookup_key(candidate))
         if matched_code is not None:
             return matched_code, unit_number
+
+    recovered_quantity_qr = _resolve_quantity_unit_qr_with_available_codes(
+        value,
+        available_codes,
+    )
+    if recovered_quantity_qr is not None:
+        return recovered_quantity_qr
 
     if not details:
         return "", None
