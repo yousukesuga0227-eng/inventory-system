@@ -39,7 +39,10 @@ class BarcodeSerialsTest(unittest.TestCase):
     def test_scanner_keyboard_separator_variants_are_normalized(self):
         base_code = "1001-2606-0007"
 
-        for separator in ("}", "｜", "\\", "]", "｝", "＼", "］"):
+        for separator in (
+            "}", "｜", "\\", "]", "｝", "＼", "］",
+            "¥", "￥", "¦", "￤", "│", "┃", "‖",
+        ):
             with self.subTest(separator=separator):
                 scanned = f"{base_code}{separator}1/2"
                 self.assertEqual(
@@ -50,6 +53,22 @@ class BarcodeSerialsTest(unittest.TestCase):
                     split_unit_barcode(scanned),
                     (base_code, 1),
                 )
+
+    def test_unknown_scanner_separator_is_recovered_by_db_match(self):
+        self.assertEqual(
+            normalize_scanned_barcode("ABCx1/17"),
+            "ABCx1/17",
+        )
+        self.assertEqual(
+            resolve_scanned_item_code("ABCx1/17", ["ABC"]),
+            ("ABC", 1),
+        )
+
+    def test_unknown_separator_does_not_override_real_item_code(self):
+        self.assertEqual(
+            resolve_scanned_item_code("ABCx1/17", ["ABCx"]),
+            ("ABCx1/17", None),
+        )
 
     def test_invalid_quantity_unit_qr_is_not_split(self):
         self.assertEqual(
