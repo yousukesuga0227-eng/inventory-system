@@ -109,8 +109,19 @@ def fetch_all(conn, query, params=None):
 # =========================
 import glob
 
+BASE_DIR = os.path.dirname(os.path.dirname(__file__))
+BUNDLED_FONT_PATH = os.path.join(
+    BASE_DIR,
+    "fonts",
+    "NotoSansJP-VariableFont_wght.ttf"
+)
+
+
 def find_japanese_font():
     candidates = [
+        # SHARK同梱フォントを最優先で使用する。
+        BUNDLED_FONT_PATH,
+
         r"C:\Windows\Fonts\meiryo.ttc",
         r"C:\Windows\Fonts\msgothic.ttc",
         r"C:\Windows\Fonts\YuGothM.ttc",
@@ -149,15 +160,6 @@ def find_japanese_font():
 
 
 FONT_PATH = find_japanese_font()
-
-if FONT_PATH:
-    st.sidebar.success(
-        f"日本語フォントOK：{os.path.basename(FONT_PATH)}"
-    )
-else:
-    st.sidebar.error(
-        "日本語フォントが見つかりません。ラベル文字が化ける可能性があります。"
-    )
 
 
 def fit_text(draw, text, font_path, max_width, start_size, min_size=18):
@@ -250,7 +252,7 @@ LABEL_HEIGHT_MM = 38
 DEFAULT_QL820_IP = "192.168.0.4"
 QL820_MODEL = "QL-820NWB"
 
-# 今回成功したテストロール設定
+# 現場で確認済みの固定設定。画面には表示しない。
 DEFAULT_QL820_LABEL_SIZE = "62"
 DEFAULT_QL820_RED = False
 DEFAULT_QL820_CUT = True
@@ -721,33 +723,11 @@ try:
         horizontal=True,
     )
 
+    # QL-820設定は現場向け画面から隠し、確認済みの値を内部固定で使用する。
     ql820_ip = DEFAULT_QL820_IP
     ql820_label_size = DEFAULT_QL820_LABEL_SIZE
     ql820_red = DEFAULT_QL820_RED
     ql820_cut = DEFAULT_QL820_CUT
-
-    if output_type == "ラベルプリント":
-        st.sidebar.header("🖨️ QL-820 印刷設定")
-
-        ql820_ip = st.sidebar.text_input(
-            "QL-820 IPアドレス",
-            value=DEFAULT_QL820_IP,
-        )
-        ql820_label_size = st.sidebar.selectbox(
-            "ロール種類",
-            options=["62"],
-            index=0,
-        )
-        ql820_cut = st.sidebar.checkbox(
-            "印刷後にカット",
-            value=DEFAULT_QL820_CUT,
-        )
-        st.sidebar.caption("用紙：DK-2205 白テープ / 黒印字")
-        st.sidebar.caption(
-            "今回のテストロールは 62 / 赤黒OFF / カットON で成功。"
-        )
-    else:
-        st.sidebar.info("A4プリントはPDFを開き、A4用プリンターから印刷します。")
 
     ph = placeholder(conn)
 
@@ -972,7 +952,7 @@ with col3:
     ):
         try:
             if not ql820_ip.strip():
-                st.error("QL-820のIPアドレスを入力してください。")
+                st.error("QL-820のIPアドレスが設定されていません。")
                 st.stop()
 
             with st.spinner("QL-820へ印刷データを送信中..."):
